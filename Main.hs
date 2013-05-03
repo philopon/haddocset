@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, NamedFieldPuns #-}
+{-# LANGUAGE OverloadedStrings, NamedFieldPuns, TupleSections #-}
 
 import Control.Applicative
 import Control.Monad
@@ -12,6 +12,7 @@ import System.Directory
 import System.Posix.Files
 
 import Data.Char
+import Data.Maybe
 import qualified Data.Map as M
 import Text.XML.Plist
 
@@ -78,6 +79,7 @@ writePList file ident name family =
   , ("CFBundleName",         PlString name)
   , ("DocSetPlatformFamily", PlString family)
   , ("isDashDocset",         PlBool   True)
+  , ("dashIndexFilePath",    PlString "index.html")
   ]
 
 createDirectoryP :: FilePath -> IO ()
@@ -90,46 +92,74 @@ createDirectoryP dir = let a:as = splitPath dir
 copyDirectory :: FilePath -> FilePath -> IO ()
 copyDirectory from to = do
   conts <- filter (`notElem` [".", ".."]) <$> getDirectoryContents from
-  forM_ conts $ \target -> doesDirectoryExist (from </> target) >>= \isDirectory ->
-    if isDirectory
+  forM_ conts $ \target -> doesDirectoryExist (from </> target) >>= \isDir ->
+    if isDir
     then createDirectory (to </> target) >> copyDirectory (from </> target) (to </> target)
     else copyFile (from </> target) (to </> target)
 
+integration :: Connection -> IO ()
+integration conn = do
+  execute_ conn "CREATE TABLE searchIndex(id INTEGER PRIMARY KEY, name TEXT, type TEXT, path TEXT)"
+  execute_ conn "CREATE UNIQUE INDEX anchor ON searchIndex (name, type, path)"
+
+insertIndex :: Connection -> String -> String -> String -> IO ()
+insertIndex conn name typ path =
+  execute conn "INSERT OR IGNORE INTO searchIndex(name, type, path) VALUES (?, ?, ?)" (name, typ, path)
+
+inTransaction :: String -> (Connection -> IO a) -> IO a
+inTransaction connString =
+  bracket
+  (open connString >>= \conn -> execute_ conn "BEGIN" >> return conn)
+  (\conn -> execute_ conn "END" >> close conn)
+
 main :: IO ()
 main = do
-  Options{output = out, inputs, link} <- parseOptions =<< getArgs
+  opts@Options{output = out, inputs} <- parseOptions =<< getArgs
   createDirectoryP $ out </> "Contents/Resources/Documents"
   writePList (out </> "Contents" </> "Info.plist") "haskell" "haskell" "haskell"  
-  withConnection (out </> "Contents/Resources/docSet.dsidx") $ \conn -> do
-    execute_ conn "CREATE TABLE searchIndex(id INTEGER PRIMARY KEY, name TEXT, type TEXT, path TEXT)"
-    execute_ conn "CREATE UNIQUE INDEX anchor ON searchIndex (name, type, path)"
-    forM_ inputs $ \f -> do
-      eitherInterfaceFile <- readInterfaceFile freshNameCache f
-      case eitherInterfaceFile of
-        Left err -> putStrLn err
+  mbModinp <- inTransaction (out </> "Contents/Resources/docSet.dsidx") $ \conn -> do
+    integration conn
+    forM inputs $ \file -> do
+      eitherInterfaceFile <- readInterfaceFile freshNameCache file
+      mbpid <- case eitherInterfaceFile of
+        Left err -> putStrLn err >> return Nothing
         Right interfaceFile -> do
-          let le   = ifLinkEnv interfaceFile
-              -- pid  = GHC.packageIdString. GHC.modulePackageId. snd $ M.findMin le
-          case M.minView le of
-            Nothing -> return ()
-            Just view -> do
-              let pid = GHC.packageIdString. GHC.modulePackageId. fst $ view
-                  from = fst $ splitFileName f
-                  to   = out </> "Contents/Resources/Documents" </> pid
-              if link 
-                then createSymbolicLink from to
-                else createDirectory to >> copyDirectory from to
-              forM_ (M.toList le) $ \(name_, mod_) -> do
-                let name     = GHC.getOccString name_
-                    typ      = case () of
-                      _ | GHC.isTyConName   name_ -> "Class"
-                        | GHC.isDataConName name_ -> "Constructor"
-                        | otherwise               -> "Function"
-                    modle    = GHC.moduleNameString $ GHC.moduleName mod_
-                    path     = pid </> map (\c -> if c == '.' then '-' else c) modle <.> "html"
-                    hash     = '#': (if GHC.isValName name_ then 'v' else 't'): ':': makeAnchorId name
-                execute conn "INSERT OR IGNORE INTO searchIndex(name, type, path) VALUES (?, ?, ?)"
-                  (name, typ :: String, path ++ hash)
+          let le = ifLinkEnv interfaceFile
+          packageProcess conn opts file le
+      return $ (,file) <$> mbpid
+
+  haddock $ [ "--gen-index", "--gen-contents"
+            , "--odir=" ++ out </> "Contents/Resources/Documents"
+            , "--title=Haskell modules on this system"
+            ] ++ map (\(dir,hdck) -> "--read-interface=" ++ dir ++ ',': hdck) (catMaybes mbModinp)
+
+packageProcess :: Connection -> Options -> String -> M.Map GHC.Name GHC.Module -> IO (Maybe String)
+packageProcess conn Options{output = out, link} file le = case M.minView le of
+  Nothing   -> return Nothing
+  Just view -> do
+    let pid = GHC.packageIdString $ GHC.modulePackageId (fst view :: GHC.Module)
+        from = fst $ splitFileName file
+        to   = out </> "Contents/Resources/Documents" </> pid
+    if link
+      then createSymbolicLink from to
+      else createDirectory to >> copyDirectory from to
+    forM_ (M.toList le) $ uncurry (moduleProcess conn pid)
+    insertIndex conn pid "Library" (pid </> "index.html")
+    return $ Just pid
+
+moduleProcess :: Connection -> String -> GHC.Name -> GHC.Module -> IO ()
+moduleProcess conn pid name mdl = do
+  let nameStr  = GHC.getOccString name
+      mdlStr   = GHC.moduleNameString $ GHC.moduleName mdl
+
+      typ      = case ()
+                 of _ | GHC.isTyConName   name -> "Class"
+                      | GHC.isDataConName name -> "Constructor"
+                      | otherwise               -> "Function"
+      path     = pid </> map (\c -> if c == '.' then '-' else c) mdlStr <.> "html"
+      hash     = '#': (if GHC.isValName name then 'v' else 't'): ':': makeAnchorId nameStr
+  insertIndex conn mdlStr  "Module" path
+  insertIndex conn nameStr typ (path ++ hash)
 
 makeAnchorId :: String -> String
 makeAnchorId [] = []
