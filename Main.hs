@@ -27,6 +27,7 @@ data RawOptions =
              , inputs_               :: [FilePath]
              , link_                 :: Bool
              , force_                :: Bool
+             , full_                 :: Bool
              , cfBundleIdentifier_   :: String
              , cfBundleName_         :: String
              , docSetPlatformFamily_ :: String
@@ -34,7 +35,7 @@ data RawOptions =
   | Help
 
 defaultOptions :: RawOptions
-defaultOptions = RawOptions "haskell.docset" [] False False "haskell" "haskell" "haskell"
+defaultOptions = RawOptions "haskell.docset" [] False False False "haskell" "haskell" "haskell"
 
 set :: (RawOptions -> RawOptions) -> RawOptions -> RawOptions
 set _ Help = Help
@@ -42,11 +43,12 @@ set f a    = f a
 
 options :: [OptDescr (RawOptions -> RawOptions)]
 options =
-  [ Option "f" ["force"]  (NoArg $       set (\a -> a{force_ = True}))                 "force"
-  , Option "l" ["link"]   (NoArg $       set (\a -> a{link_  = True}))                 "use symbolic link"
-  , Option "o" ["output"] (ReqArg (\o -> set (\a -> a{output_ = o}))           "FILE") "output file"
-  , Option "i" ["input"]  (ReqArg (\o -> set (\a -> a{inputs_ = o:inputs_ a})) "FILE") "input *.haddock file"
-  , Option "h" ["help"]   (NoArg $ const Help) "show this message"
+  [ Option "f" ["force"]     (NoArg $       set (\a -> a{force_  = True}))                "force"
+  , Option []  ["full-name"] (NoArg $       set (\a -> a{full_   = True}))                "full name index"
+  , Option "l" ["link"]      (NoArg $       set (\a -> a{link_   = True}))                "use symbolic link"
+  , Option "o" ["output"]    (ReqArg (\o -> set (\a -> a{output_ = o}))           "FILE") "output file"
+  , Option "i" ["input"]     (ReqArg (\o -> set (\a -> a{inputs_ = o:inputs_ a})) "FILE") "input *.haddock file"
+  , Option "h" ["help"]      (NoArg $ const Help) "show this message"
   , Option [] ["cf-bundle-identifier"]   (ReqArg (\o -> set (\a -> a{cfBundleIdentifier_   = o}))   "ID") "plist"
   , Option [] ["cf-bundle-name"]         (ReqArg (\o -> set (\a -> a{cfBundleName_         = o})) "NAME") "plist"
   , Option [] ["docset-platform-family"] (ReqArg (\o -> set (\a -> a{docSetPlatformFamily_ = o}))  "FAM") "plist"
@@ -56,6 +58,7 @@ data Options =
   Options { output               :: FilePath
           , inputs               :: [FilePath]
           , link                 :: Bool
+          , full                 :: Bool
           , cfBundleIdentifier   :: String
           , cfBundleName         :: String
           , docSetPlatformFamily :: String
@@ -71,13 +74,20 @@ parseOptions args = do
   case getOpt Permute options args of
     (ofs, _, []) -> case foldl (flip id) defaultOptions ofs of
       Help                                  -> putStrLn (usageInfo header options) >> exitSuccess
-      RawOptions{output_ = o, inputs_, force_, link_,
+      RawOptions{output_ = o, inputs_, force_, link_, full_,
                  cfBundleIdentifier_, cfBundleName_, docSetPlatformFamily_} -> do
         whenM (doesDirectoryExist o) $
           if force_
           then removeDirectoryRecursive o
           else throwIO (userError "output file already exists.")
-        return $ Options o inputs_ link_ cfBundleIdentifier_ cfBundleName_ docSetPlatformFamily_
+        return $ Options{ output = o
+                        , inputs = inputs_
+                        , link   = link_
+                        , full   = full_
+                        , cfBundleIdentifier   = cfBundleIdentifier_
+                        , cfBundleName         = cfBundleName_
+                        , docSetPlatformFamily = docSetPlatformFamily_
+                        }
     (_, _, errs) -> ioError $ userError $ concat errs ++ usageInfo header options
 
 --------------------------------------------------------------------------------
@@ -145,7 +155,7 @@ main = do
             ] ++ map (\(dir,hdck) -> "--read-interface=" ++ dir ++ ',': hdck) (catMaybes mbModinp)
 
 packageProcess :: Connection -> Options -> String -> M.Map GHC.Name GHC.Module -> IO (Maybe String)
-packageProcess conn Options{output = out, link} file le = case M.minView le of
+packageProcess conn Options{output = out, link, full} file le = case M.minView le of
   Nothing   -> return Nothing
   Just view -> do
     let pid = GHC.packageIdString $ GHC.modulePackageId (fst view :: GHC.Module)
@@ -154,12 +164,12 @@ packageProcess conn Options{output = out, link} file le = case M.minView le of
     if link
       then createSymbolicLink from to
       else createDirectory to >> copyDirectory from to
-    forM_ (M.toList le) $ uncurry (moduleProcess conn pid)
+    forM_ (M.toList le) $ uncurry (moduleProcess full conn pid)
     insertIndex conn pid "Library" (pid </> "index.html")
     return $ Just pid
 
-moduleProcess :: Connection -> String -> GHC.Name -> GHC.Module -> IO ()
-moduleProcess conn pid name mdl = do
+moduleProcess :: Bool -> Connection -> String -> GHC.Name -> GHC.Module -> IO ()
+moduleProcess full conn pid name mdl = do
   let nameStr  = GHC.getOccString name
       mdlStr   = GHC.moduleNameString $ GHC.moduleName mdl
 
@@ -170,7 +180,7 @@ moduleProcess conn pid name mdl = do
       path     = pid </> map (\c -> if c == '.' then '-' else c) mdlStr <.> "html"
       hash     = '#': (if GHC.isValName name then 'v' else 't'): ':': makeAnchorId nameStr
   insertIndex conn mdlStr  "Module" path
-  insertIndex conn nameStr typ (path ++ hash)
+  insertIndex conn ((if full then (mdlStr <.>) else id) nameStr) typ (path ++ hash)
 
 makeAnchorId :: String -> String
 makeAnchorId [] = []
