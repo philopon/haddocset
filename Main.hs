@@ -23,15 +23,18 @@ import qualified Name   as GHC
 import Documentation.Haddock
 
 data RawOptions =
-  RawOptions { output_ :: FilePath
-             , inputs_ :: [FilePath]
-             , link_   :: Bool
-             , force_  :: Bool
+  RawOptions { output_               :: FilePath
+             , inputs_               :: [FilePath]
+             , link_                 :: Bool
+             , force_                :: Bool
+             , cfBundleIdentifier_   :: String
+             , cfBundleName_         :: String
+             , docSetPlatformFamily_ :: String
              }
   | Help
 
 defaultOptions :: RawOptions
-defaultOptions = RawOptions "haskell.docset" [] False False
+defaultOptions = RawOptions "haskell.docset" [] False False "haskell" "haskell" "haskell"
 
 set :: (RawOptions -> RawOptions) -> RawOptions -> RawOptions
 set _ Help = Help
@@ -44,12 +47,18 @@ options =
   , Option "o" ["output"] (ReqArg (\o -> set (\a -> a{output_ = o}))           "FILE") "output file"
   , Option "i" ["input"]  (ReqArg (\o -> set (\a -> a{inputs_ = o:inputs_ a})) "FILE") "input *.haddock file"
   , Option "h" ["help"]   (NoArg $ const Help) "show this message"
+  , Option [] ["cf-bundle-identifier"]   (ReqArg (\o -> set (\a -> a{cfBundleIdentifier_   = o}))   "ID") "plist"
+  , Option [] ["cf-bundle-name"]         (ReqArg (\o -> set (\a -> a{cfBundleName_         = o})) "NAME") "plist"
+  , Option [] ["docset-platform-family"] (ReqArg (\o -> set (\a -> a{docSetPlatformFamily_ = o}))  "FAM") "plist"
   ]
 
 data Options =
-  Options { output :: FilePath
-          , inputs :: [FilePath]
-          , link   :: Bool
+  Options { output               :: FilePath
+          , inputs               :: [FilePath]
+          , link                 :: Bool
+          , cfBundleIdentifier   :: String
+          , cfBundleName         :: String
+          , docSetPlatformFamily :: String
           }
   deriving Show
 
@@ -62,12 +71,13 @@ parseOptions args = do
   case getOpt Permute options args of
     (ofs, _, []) -> case foldl (flip id) defaultOptions ofs of
       Help                                  -> putStrLn (usageInfo header options) >> exitSuccess
-      RawOptions{output_ = o, inputs_ = is, force_ = f, link_ = l} -> do
+      RawOptions{output_ = o, inputs_, force_, link_,
+                 cfBundleIdentifier_, cfBundleName_, docSetPlatformFamily_} -> do
         whenM (doesDirectoryExist o) $
-          if f
+          if force_
           then removeDirectoryRecursive o
           else throwIO (userError "output file already exists.")
-        return $ Options o is l
+        return $ Options o inputs_ link_ cfBundleIdentifier_ cfBundleName_ docSetPlatformFamily_
     (_, _, errs) -> ioError $ userError $ concat errs ++ usageInfo header options
 
 --------------------------------------------------------------------------------
@@ -114,9 +124,10 @@ inTransaction connString =
 
 main :: IO ()
 main = do
-  opts@Options{output = out, inputs} <- parseOptions =<< getArgs
+  opts@Options{output = out, inputs,
+               cfBundleIdentifier, cfBundleName, docSetPlatformFamily} <- parseOptions =<< getArgs
   createDirectoryP $ out </> "Contents/Resources/Documents"
-  writePList (out </> "Contents" </> "Info.plist") "haskell" "haskell" "haskell"  
+  writePList (out </> "Contents" </> "Info.plist") cfBundleIdentifier cfBundleName docSetPlatformFamily
   mbModinp <- inTransaction (out </> "Contents/Resources/docSet.dsidx") $ \conn -> do
     integration conn
     forM inputs $ \file -> do
