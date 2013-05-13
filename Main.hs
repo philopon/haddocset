@@ -1,8 +1,9 @@
-{-# LANGUAGE OverloadedStrings, NamedFieldPuns, TupleSections #-}
+{-#LANGUAGE TemplateHaskell, NamedFieldPuns, OverloadedStrings, TupleSections#-}
 
 import Control.Applicative
 import Control.Monad
 import Control.Exception
+import Control.Lens hiding ((<.>))
 
 import System.Exit
 import System.Environment
@@ -11,86 +12,86 @@ import System.FilePath
 import System.Directory
 import System.Posix.Files
 
-import Data.Char
-import Data.Maybe
-import qualified Data.Map as M
-import Text.XML.Plist
-
 import Database.SQLite.Simple
 
+import Text.XML
+import Text.XML.Plist
+
+import Data.Maybe
+import Data.Char
+import Data.String (fromString)
+import qualified Data.Text     as T
+import qualified Data.Map.Lazy as ML
+
+
+import qualified Text.HTML.DOM as HTML
+import Text.XML.Cursor
+
 import qualified Module as GHC
-import qualified Name   as GHC
-import Documentation.Haddock
+import Documentation.Haddock hiding (Interface)
+--------------------------------------------------------------------------------
 
-data RawOptions =
-  RawOptions { output_               :: FilePath
-             , inputs_               :: [FilePath]
-             , link_                 :: Bool
-             , force_                :: Bool
-             , full_                 :: Bool
-             , cfBundleIdentifier_   :: String
-             , cfBundleName_         :: String
-             , docSetPlatformFamily_ :: String
-             }
-  | Help
-
-defaultOptions :: RawOptions
-defaultOptions = RawOptions "haskell.docset" [] False False False "haskell" "haskell" "haskell"
-
-set :: (RawOptions -> RawOptions) -> RawOptions -> RawOptions
-set _ Help = Help
-set f a    = f a
-
-options :: [OptDescr (RawOptions -> RawOptions)]
-options =
-  [ Option "f" ["force"]     (NoArg $       set (\a -> a{force_  = True}))                "force"
-  , Option []  ["full-name"] (NoArg $       set (\a -> a{full_   = True}))                "full name index"
-  , Option "l" ["link"]      (NoArg $       set (\a -> a{link_   = True}))                "use symbolic link"
-  , Option "o" ["output"]    (ReqArg (\o -> set (\a -> a{output_ = o}))           "FILE") "output file"
-  , Option "i" ["input"]     (ReqArg (\o -> set (\a -> a{inputs_ = o:inputs_ a})) "FILE") "input *.haddock file"
-  , Option "h" ["help"]      (NoArg $ const Help) "show this message"
-  , Option [] ["cf-bundle-identifier"]   (ReqArg (\o -> set (\a -> a{cfBundleIdentifier_   = o}))   "ID") "plist"
-  , Option [] ["cf-bundle-name"]         (ReqArg (\o -> set (\a -> a{cfBundleName_         = o})) "NAME") "plist"
-  , Option [] ["docset-platform-family"] (ReqArg (\o -> set (\a -> a{docSetPlatformFamily_ = o}))  "FAM") "plist"
-  ]
-
-data Options =
-  Options { output               :: FilePath
-          , inputs               :: [FilePath]
-          , link                 :: Bool
-          , full                 :: Bool
-          , cfBundleIdentifier   :: String
-          , cfBundleName         :: String
-          , docSetPlatformFamily :: String
+data Options a =
+  Options { _overwrite            :: Bool
+          , _fullName             :: Bool
+          , _output               :: FilePath
+          , _inputs               :: [a]
+          , _cfBundleIdentifier   :: String
+          , _cfBundleName         :: String
+          , _docSetPlatformFamily :: String
           }
+  | Help
   deriving Show
 
-whenM :: Monad m => m Bool -> m () -> m ()
-whenM mb f = mb >>= \b -> when b f
+type Interface = (Maybe FilePath, FilePath)
 
-parseOptions :: [String] -> IO Options
+makeLenses ''Options
+
+defaultOptions :: Options FilePath
+defaultOptions = Options { _overwrite            = False
+                         , _fullName             = False
+                         , _output               = "haskell.docset"
+                         , _inputs               = []
+                         , _cfBundleIdentifier   = "haskell"
+                         , _cfBundleName         = "haskell"
+                         , _docSetPlatformFamily = "haskell"
+                         }
+
+options :: [OptDescr (Options FilePath -> Options FilePath)]
+options =
+  [ Option "f" ["force"]                 (NoArg  $ overwrite .~ True) "over write"
+  , Option []  ["full-name"]             (NoArg  $ fullName  .~ True) "full name"
+  , Option "h" ["help"]                  (NoArg  $ const Help) "show this message"
+  , Option "o" ["output"]                (ReqArg (output .~)              "FILE") "output"
+  , Option "i" ["input"]                 (ReqArg ((inputs %~) . cons)     "FILE") "input"
+  , Option [] ["cf-bundle-identifier"]   (ReqArg (cfBundleIdentifier .~)    "ID") "plist"
+  , Option [] ["cf-bundle-name"]         (ReqArg (cfBundleName .~)        "NAME") "plist"
+  , Option [] ["docset-platform-family"] (ReqArg (docSetPlatformFamily .~) "FAM") "plist"
+  ]
+
+parseOptions :: [String] -> IO (Options Interface)
 parseOptions args = do
   header <- getProgName >>= \pn -> return $ "Usage: " ++ pn ++ " [OPTIONS]\nOPTIONS:"
   case getOpt Permute options args of
     (ofs, _, []) -> case foldl (flip id) defaultOptions ofs of
-      Help                                  -> putStrLn (usageInfo header options) >> exitSuccess
-      RawOptions{output_ = o, inputs_, force_, link_, full_,
-                 cfBundleIdentifier_, cfBundleName_, docSetPlatformFamily_} -> do
-        whenM (doesDirectoryExist o) $
-          if force_
-          then removeDirectoryRecursive o
-          else throwIO (userError "output file already exists.")
-        return $ Options{ output = o
-                        , inputs = inputs_
-                        , link   = link_
-                        , full   = full_
-                        , cfBundleIdentifier   = cfBundleIdentifier_
-                        , cfBundleName         = cfBundleName_
-                        , docSetPlatformFamily = docSetPlatformFamily_
-                        }
+      Help -> putStrLn (usageInfo header options) >> exitSuccess
+      opts -> do
+        oe <- doesFileOrDirExist (opts ^. output)
+        when (not (opts ^?! overwrite) && oe) $ putStrLn "output already exists." >> exitFailure
+        inps <- opts ^!! inputs . folded . act toInterface
+        return $ opts & inputs .~ inps
     (_, _, errs) -> ioError $ userError $ concat errs ++ usageInfo header options
 
+doesFileOrDirExist :: FilePath -> IO Bool
+doesFileOrDirExist fd = (||) <$> doesFileExist fd <*> doesDirectoryExist fd
+
 --------------------------------------------------------------------------------
+
+createDirectoryP :: FilePath -> IO ()
+createDirectoryP dir = foldM_ sub "" (splitPath dir)
+  where sub p a = do e <- doesDirectoryExist (p </> a)
+                     unless e $ createDirectory (p </> a)
+                     return $ p </> a
 
 writePList :: FilePath -> String -> String -> String -> IO ()
 writePList file ident name family =
@@ -102,29 +103,32 @@ writePList file ident name family =
   , ("dashIndexFilePath",    PlString "index.html")
   ]
 
-createDirectoryP :: FilePath -> IO ()
-createDirectoryP dir = let a:as = splitPath dir
-                       in sub a as
-  where sub p    []  =    whenM (not <$> doesDirectoryExist p) $ createDirectory p
-        sub p (a:as) = do whenM (not <$> doesDirectoryExist p) $ createDirectory p
-                          sub (p </> a) as
-
-copyDirectory :: FilePath -> FilePath -> IO ()
-copyDirectory from to = do
-  conts <- filter (`notElem` [".", ".."]) <$> getDirectoryContents from
-  forM_ conts $ \target -> doesDirectoryExist (from </> target) >>= \isDir ->
-    if isDir
-    then createDirectory (to </> target) >> copyDirectory (from </> target) (to </> target)
-    else copyFile (from </> target) (to </> target)
-
 integration :: Connection -> IO ()
 integration conn = do
-  execute_ conn "CREATE TABLE searchIndex(id INTEGER PRIMARY KEY, name TEXT, type TEXT, path TEXT)"
-  execute_ conn "CREATE UNIQUE INDEX anchor ON searchIndex (name, type, path)"
+  execute_ conn "CREATE TABLE IF NOT EXISTS searchIndex(id INTEGER PRIMARY KEY, name TEXT, type TEXT, path TEXT);"
+  execute_ conn "CREATE UNIQUE INDEX IF NOT EXISTS anchor ON searchIndex (name, type, path);"
+  execute_ conn "DELETE FROM searchIndex;"
 
-insertIndex :: Connection -> String -> String -> String -> IO ()
-insertIndex conn name typ path =
-  execute conn "INSERT OR IGNORE INTO searchIndex(name, type, path) VALUES (?, ?, ?)" (name, typ, path)
+scaffolding :: Options Interface -> IO ()
+scaffolding opts = do
+  createDirectoryP $ opts ^. output </> "Contents/Resources/Documents"
+  linkRoot $ opts ^. output </> "Contents/Resources/Documents/root"
+  writePList (opts ^. output </> "Contents/Info.plist")
+    (opts ^. cfBundleIdentifier) (opts ^. cfBundleName) (opts ^. docSetPlatformFamily)
+
+linkRoot :: FilePath -> IO ()
+linkRoot root = fileExist root >>= \e ->
+  if e
+  then do stat <- getSymbolicLinkStatus root
+          if isSymbolicLink stat
+            then (== "/") <$> readSymbolicLink root >>=
+                 \toRoot -> if toRoot
+                            then return ()
+                            else removeLink root >> createSymbolicLink "/" root
+            else throwIO $ userError "cannot create root directory link. maybe already exists."
+  else createSymbolicLink "/" root
+
+--------------------------------------------------------------------------------
 
 inTransaction :: String -> (Connection -> IO a) -> IO a
 inTransaction connString =
@@ -132,63 +136,87 @@ inTransaction connString =
   (open connString >>= \conn -> execute_ conn "BEGIN" >> return conn)
   (\conn -> execute_ conn "END" >> close conn)
 
+insertIndex :: Connection -> T.Text -> T.Text -> FilePath -> IO ()
+insertIndex conn name typ path =
+  execute conn "INSERT OR IGNORE INTO searchIndex(name, type, path) VALUES (?, ?, ?);" (name, typ, path)
+
+--------------------------------------------------------------------------------
+
+type Reference = (Maybe T.Text, T.Text, T.Text)
+parseDocument :: FilePath -> IO [Reference]
+parseDocument path = do
+  cur  <- fromDocument <$> HTML.readFile (fromString path)
+  let defs    = cur $// hasClass "def"
+  let refs    = catMaybes $ flip map defs $ \node -> do
+        let typ = listToMaybe $
+                  parent node >>= (child >=> hasClass "keyword" >=> child >=> content)
+        fun  <- listToMaybe $ node $| child >=> content
+        name <- listToMaybe $ attribute "name" node
+        return (typ, funEsc fun, name)
+  return refs
+  where funEsc a = if let c = T.head a in isAlpha c || (c `elem` "_(")
+                   then a
+                   else '(' `T.cons` a `T.snoc` ')'
+
+hasClass :: T.Text -> Axis
+hasClass c = checkElement $ \e -> case ML.lookup "class" (elementAttributes e) of
+  Nothing  -> False
+  Just cls -> c `T.isInfixOf` cls
+
+toEntryType :: Reference -> T.Text
+toEntryType (Just "type",    _, _) = "Type"
+toEntryType (Just "data",    _, _) = "Class"
+toEntryType (Just "newtype", _, _) = "Class"
+toEntryType (Just "class",   _, _) = "Mixin"
+toEntryType (_, f, _) = if isUpper $ T.head f
+                        then "Constructor"
+                        else "Function"
+
+--------------------------------------------------------------------------------
+
+toInterface :: FilePath -> IO Interface
+toInterface path = let (a, b) = span (/= ',') path
+                   in if null b
+                      then (Nothing,) <$> canonicalizePath b
+                      else (,) <$> (Just <$> canonicalizePath a) <*> canonicalizePath (tail b)
+
+insertModule :: Connection -> Options Interface -> FilePath -> String -> IO ()
+insertModule conn opts dir mdl = do
+  let path = dir </> map (\c -> if c == '.' then '-' else c) mdl <.> "html"
+  e <- doesFileExist path
+  when e $ do
+    insertIndex conn (T.pack mdl) "Module" ("root" ++ path)
+    mapM_ (insert $ "root" ++ path) =<< parseDocument path
+  where insert path ref = insertIndex conn
+                          ((if opts ^?! fullName
+                            then ((T.pack mdl `T.snoc` '.') `T.append`)
+                            else id) $ ref^._2)
+                          (toEntryType ref)
+                          (path ++ '#': ref^._3.to T.unpack)
+
 main :: IO ()
 main = do
-  opts@Options{output = out, inputs,
-               cfBundleIdentifier, cfBundleName, docSetPlatformFamily} <- parseOptions =<< getArgs
-  createDirectoryP $ out </> "Contents/Resources/Documents"
-  writePList (out </> "Contents" </> "Info.plist") cfBundleIdentifier cfBundleName docSetPlatformFamily
-  mbModinp <- inTransaction (out </> "Contents/Resources/docSet.dsidx") $ \conn -> do
+  opts <- parseOptions =<< getArgs
+  scaffolding opts 
+  inTransaction (opts ^. output </> "Contents/Resources/docSet.dsidx") $ \conn -> do
     integration conn
-    forM inputs $ \file -> do
-      eitherInterfaceFile <- readInterfaceFile freshNameCache file
-      mbpid <- case eitherInterfaceFile of
-        Left err -> putStrLn err >> return Nothing
-        Right interfaceFile -> do
-          let le = ifLinkEnv interfaceFile
-          packageProcess conn opts file le
-      return $ (,file) <$> mbpid
-
+    forM_ (opts ^. inputs) $ \(mbdir, hdck) -> do
+      eif <- readInterfaceFile freshNameCache hdck
+      case ifInstalledIfaces <$> eif of
+        Left  err   -> putStrLn err
+        Right ifces -> do
+          let mods = map (GHC.moduleNameString . GHC.moduleName . instMod) .
+                     filter ((OptHide `notElem`) . instOptions) $ ifces
+              pkg  = GHC.packageIdString . GHC.modulePackageId . instMod <$> listToMaybe ifces
+          let dir = maybe (takeDirectory hdck) id mbdir
+          when (isJust pkg) $
+            insertIndex conn (T.pack $ fromJust pkg) "Package" ("root" ++ dir </> "index.html")
+          mapM_ (insertModule conn opts dir) mods
   haddock $ [ "--gen-index", "--gen-contents"
-            , "--odir=" ++ out </> "Contents/Resources/Documents"
+            , "--odir=" ++ opts ^. output </> "Contents/Resources/Documents"
             , "--title=Haskell modules on this system"
-            ] ++ map (\(dir,hdck) -> "--read-interface=" ++ dir ++ ',': hdck) (catMaybes mbModinp)
+            ] ++ map toHaddockInterface (opts ^. inputs)
 
-packageProcess :: Connection -> Options -> String -> M.Map GHC.Name GHC.Module -> IO (Maybe String)
-packageProcess conn Options{output = out, link, full} file le = case M.minView le of
-  Nothing   -> return Nothing
-  Just view -> do
-    let pid = GHC.packageIdString $ GHC.modulePackageId (fst view :: GHC.Module)
-        from = fst $ splitFileName file
-        to   = out </> "Contents/Resources/Documents" </> pid
-    if link
-      then createSymbolicLink from to
-      else createDirectory to >> copyDirectory from to
-    forM_ (M.toList le) $ uncurry (moduleProcess full conn pid)
-    insertIndex conn pid "Library" (pid </> "index.html")
-    return $ Just pid
-
-moduleProcess :: Bool -> Connection -> String -> GHC.Name -> GHC.Module -> IO ()
-moduleProcess full conn pid name mdl = do
-  let nameStr  = GHC.getOccString name
-      mdlStr   = GHC.moduleNameString $ GHC.moduleName mdl
-
-      typ      = case ()
-                 of _ | GHC.isTyConName   name -> "Class"
-                      | GHC.isDataConName name -> "Constructor"
-                      | otherwise               -> "Function"
-      path     = pid </> map (\c -> if c == '.' then '-' else c) mdlStr <.> "html"
-      hash     = '#': (if GHC.isValName name then 'v' else 't'): ':': makeAnchorId nameStr
-  insertIndex conn mdlStr  "Module" path
-  insertIndex conn ((if full then (mdlStr <.>) else id) nameStr) typ (path ++ hash)
-
-makeAnchorId :: String -> String
-makeAnchorId [] = []
-makeAnchorId (f:r) = escape isLegal f ++ concatMap (escape isLegal) r
-  where
-    escape p c | p c = [c]
-               | otherwise = '-' : show (ord c) ++ "-"
-    isLegal ':' = True
-    isLegal '_' = True
-    isLegal '.' = True
-    isLegal c = isAscii c && isAlphaNum c
+toHaddockInterface :: Interface -> String
+toHaddockInterface (Nothing, f) = "--read-interface=" ++ f
+toHaddockInterface (Just d,  f) = "--read-interface=" ++ d ++ ',': f
