@@ -23,12 +23,12 @@ import Data.String (fromString)
 import qualified Data.Text     as T
 import qualified Data.Map.Lazy as ML
 
-
 import qualified Text.HTML.DOM as HTML
 import Text.XML.Cursor
 
 import qualified Module as GHC
 import Documentation.Haddock hiding (Interface)
+
 --------------------------------------------------------------------------------
 
 data Options a =
@@ -122,9 +122,7 @@ linkRoot root = fileExist root >>= \e ->
   then do stat <- getSymbolicLinkStatus root
           if isSymbolicLink stat
             then (== "/") <$> readSymbolicLink root >>=
-                 \toRoot -> if toRoot
-                            then return ()
-                            else removeLink root >> createSymbolicLink "/" root
+                 \toRoot -> unless toRoot $ removeLink root >> createSymbolicLink "/" root
             else throwIO $ userError "cannot create root directory link. maybe already exists."
   else createSymbolicLink "/" root
 
@@ -208,7 +206,7 @@ main = do
           let mods = map (GHC.moduleNameString . GHC.moduleName . instMod) .
                      filter ((OptHide `notElem`) . instOptions) $ ifces
               pkg  = GHC.packageIdString . GHC.modulePackageId . instMod <$> listToMaybe ifces
-          let dir = maybe (takeDirectory hdck) id mbdir
+          let dir = fromMaybe (takeDirectory hdck) mbdir
           when (isJust pkg) $
             insertIndex conn (T.pack $ fromJust pkg) "Package" ("root" ++ dir </> "index.html")
           mapM_ (insertModule conn opts dir) mods
