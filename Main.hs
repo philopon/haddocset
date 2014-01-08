@@ -175,7 +175,7 @@ toEntryType (_, f, _) = if isUpper $ T.head f
 toInterface :: FilePath -> IO Interface
 toInterface path = let (a, b) = span (/= ',') path
                    in if null b
-                      then (Nothing,) <$> canonicalizePath b
+                      then (Nothing,) <$> canonicalizePath a
                       else (,) <$> (Just <$> canonicalizePath a) <*> canonicalizePath (tail b)
 
 insertModule :: Connection -> Options Interface -> FilePath -> String -> IO ()
