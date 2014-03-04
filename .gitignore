@@ -3,3 +3,6 @@ dist
 .DS_Store
 .cabal-sandbox
 cabal.sandbox.config
+haddocset.hi
+haddocset.o
+haddocset
