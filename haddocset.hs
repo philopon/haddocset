@@ -1,39 +1,44 @@
-{-# LANGUAGE NoMonomorphismRestriction, ViewPatterns, OverloadedStrings, StandaloneDeriving #-}
-{-# LANGUAGE RecordWildCards, TupleSections, NamedFieldPuns, Rank2Types #-}
+{-# LANGUAGE NamedFieldPuns            #-}
+{-# LANGUAGE OverloadedStrings         #-}
+{-# LANGUAGE Rank2Types                #-}
+{-# LANGUAGE RecordWildCards           #-}
+{-# LANGUAGE StandaloneDeriving        #-}
+{-# LANGUAGE TupleSections             #-}
+{-# LANGUAGE ViewPatterns              #-}
 
 import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.IO.Class
 
-import qualified Filesystem                as P
-import qualified Filesystem.Path.CurrentOS as P
+import qualified Filesystem                        as P
+import qualified Filesystem.Path.CurrentOS         as P
 
-import           System.Process
 import           System.IO
 import           System.IO.Error
+import           System.Process
 
-import qualified Database.SQLite.Simple  as Sql
+import qualified Database.SQLite.Simple            as Sql
 
 import           Data.Maybe
-import qualified Data.Text               as T
-import           Text.HTML.TagSoup       as Ts
-import           Text.HTML.TagSoup.Match as Ts
+import qualified Data.Text                         as T
+import           Text.HTML.TagSoup                 as Ts
+import           Text.HTML.TagSoup.Match           as Ts
 
 import           Distribution.InstalledPackageInfo
-import           Distribution.Text(display)
 import           Distribution.Package
+import           Distribution.Text                 (display)
 import           Documentation.Haddock
-import qualified Module                  as Ghc
-import qualified Name                    as Ghc
+import qualified Module                            as Ghc
+import qualified Name                              as Ghc
 
 import           Data.Conduit
-import qualified Data.Conduit.List       as CL
-import qualified Data.Conduit.Filesystem as P
+import qualified Data.Conduit.Filesystem           as P
+import qualified Data.Conduit.List                 as CL
 
 import           Options.Applicative
 
 docsetDir :: P.FilePath -> P.FilePath
-docsetDir d = 
+docsetDir d =
     if P.extension d == Just "docset"
     then d
     else d P.<.> "docset"
@@ -58,7 +63,7 @@ parseConf pifile = do
 
         ParseOk _  _  -> Nothing
 
-data Plist = Plist 
+data Plist = Plist
     { cfBundleIdentifier   :: String
     , cfBundleName         :: String
     , docSetPlatformFamily :: String
@@ -165,14 +170,14 @@ data Provider
     | Function PackageId Ghc.Module Ghc.Name
 
 moduleProvider :: MonadIO m => InstalledPackageInfo -> Producer m Provider
-moduleProvider iFile = 
+moduleProvider iFile =
     mapM_ sub $ haddockInterfaces iFile
-  where 
+  where
     sub file = do
         rd <- liftIO $ readInterfaceFile freshNameCache file
         case rd of
             Left _ -> return ()
-            Right (ifInstalledIfaces -> iIntrf) -> do 
+            Right (ifInstalledIfaces -> iIntrf) -> do
                 let pkg = sourcePackageId iFile
                 yield $ Haddock pkg (P.decodeString file)
                 yield $ Package pkg
@@ -194,7 +199,7 @@ moduleNmaeUrl :: String -> String
 moduleNmaeUrl = map dot2Dash
   where dot2Dash '.'  = '-'
         dot2Dash c    = c
- 
+
 populateModule :: Sql.Connection -> PackageId -> Ghc.Module -> IO ()
 populateModule conn pkg modn =
     Sql.execute conn "INSERT OR IGNORE INTO searchIndex(name, type, path, package) VALUES (?,?,?,?);"
@@ -202,12 +207,12 @@ populateModule conn pkg modn =
   where
     url = display pkg ++ '/':
           (moduleNmaeUrl . Ghc.moduleNameString . Ghc.moduleName) modn ++ ".html"
- 
+
 populateFunction :: Sql.Connection -> PackageId -> Ghc.Module -> Ghc.Name -> IO ()
 populateFunction conn pkg modn name =
     Sql.execute conn "INSERT OR IGNORE INTO searchIndex(name, type, path, package) VALUES (?,?,?,?);"
         (Ghc.getOccString name, dataType :: String, url, display pkg)
-  where 
+  where
     url = display pkg ++ '/':
           (moduleNmaeUrl . Ghc.moduleNameString . Ghc.moduleName) modn ++ ".html#" ++
           prefix : ':' :
@@ -303,7 +308,7 @@ addCommand o = do
             | otherwise               = ioError ioe
 
 listCommand :: Options -> IO ()
-listCommand o = 
+listCommand o =
     mapM_ (putStrLn . P.encodeString . P.dropExtension . P.filename) =<< P.listDirectory (optHaddockDir o)
 
 data Options
@@ -321,7 +326,7 @@ optDocumentsDir opt = optTarget opt P.</> "Contents/Resources/Documents/"
 data Command
     = Create { createPlist :: Plist }
     | List
-    | Add    { toAddConfs  :: [P.FilePath] }
+    | Add    { toAddConfs :: [P.FilePath] }
     deriving Show
 
 main :: IO ()
@@ -331,11 +336,11 @@ main = do
         Options{optCommand = Create{}} -> createCommand opts
         Options{optCommand = List}     -> listCommand   opts
         Options{optCommand = Add{}}    -> addCommand    opts
-  where 
+  where
     optRule = info (helper <*> options) fullDesc
     options = Options
               <$> (strOption (long "hc-pkg" <> metavar "CMD" <> help "hc-pkg command (default: ghc-pkg)") <|> pure "ghc-pkg")
-              <*> fmap (docsetDir . P.decodeString) 
+              <*> fmap (docsetDir . P.decodeString)
                   (strOption (long "target" <> short 't' <> metavar "DOCSET" <> help "output directory (default: haskell.docset)") <|> pure "haskell")
               <*> switch (long "quiet" <> short 'q' <> help "suppress output.")
               <*> subparser (command "create" (info createOpts  $ progDesc "crate new docset.")
@@ -347,4 +352,4 @@ main = do
                  <*> (strOption (long "CFBundleName")         <|> pure "Haskell")
                  <*> (strOption (long "DocSetPlatformFamily") <|> pure "haskell")
     addOpts    = Add <$> arguments1 (Just . P.decodeString) (metavar "CONFS" <> help "path to installed package configuration.")
-    
+

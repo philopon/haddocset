@@ -18,7 +18,7 @@ cabal-version:       >=1.10
 executable haddocset
   main-is:             haddocset.hs
   -- other-modules:       
-  other-extensions:    NoMonomorphismRestriction, ViewPatterns
+  ghc-options:         -Wall -O2
   build-depends:       base                 >= 4.6
                      , ghc                  >= 7.4
                      , optparse-applicative >= 0.7
