@@ -1,0 +1,41 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd"><html xmlns="http://www.w3.org/1999/xhtml"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"></meta><title>direct-sqlite-2.3.11: Low-level binding to SQLite3.  Includes UTF8 and BLOB support.</title><link href="ocean.css" rel="stylesheet" type="text/css" title="Ocean"></link><script src="haddock-util.js" type="text/javascript"></script><script type="text/javascript">//<![CDATA[
+window.onload = function () {pageLoad();};
+//]]>
+</script></head><body><div id="package-header"><ul class="links" id="page-menu"><li><a href="../direct-sqlite-2.3.11/index.html">Contents</a></li><li><a href="../direct-sqlite-2.3.11/doc-index.html">Index</a></li></ul><p class="caption">direct-sqlite-2.3.11: Low-level binding to SQLite3.  Includes UTF8 and BLOB support.</p></div><div id="content"><div id="description"><h1>direct-sqlite-2.3.11: Low-level binding to SQLite3.  Includes UTF8 and BLOB support.</h1><div class="doc"><p>This package is not very different from the other SQLite3 bindings out
+there, but it fixes a few deficiencies I was finding.  As compared to
+bindings-sqlite3, it is slightly higher-level, in that it supports
+marshalling of data values to and from the database.  In particular, it
+supports strings encoded as UTF8, and BLOBs represented as ByteStrings.
+</p><p>Release history:
+</p><dl><dt>Version 2.3.11</dt><dd> Add support for URI filenames, and default to having them on. Among other things, this enables using in-memory databases.
+</dd><dt>Version 2.3.10</dt><dd> Add support for compiling the bundled SQLite3 with URI filename support. Specifying flags that would have affected the bundled SQLite3 no longer causes build failure if the <a href="../direct-sqlite-2.3.11/systemlib.html">systemlib</a> flag is specified.
+</dd><dt>Version 2.3.9</dt><dd> Update bounds on the requirement on the <a href="../direct-sqlite-2.3.11/text.html">text</a> library.
+</dd><dt>Version 2.3.8</dt><dd> Upgrade bundled SQLite3 to 3.8.1.
+</dd><dt>Version 2.3.7</dt><dd> Fix a test failure related to 64-bit math on column indices.
+</dd><dt>Version 2.3.6</dt><dd> Re-apply the stat64 hack after upgrade to the bundled
+SQLite3.  Oops!
+</dd><dt>Version 2.3.5</dt><dd> Add support to compile bundled SQLite3 with full-text search.  Upgrade bundled SQLite3 to 3.7.17.
+</dd><dt>Version 2.3.4</dt><dd> Work around a linker error on some systems; add
+column-name reporting.
+</dd><dt>Version 2.3.3.1</dt><dd> Upgrade bundled SQLite3 to 3.7.15.2.
+</dd><dt>Version 2.3.3</dt><dd> Add trace support, as a feature for debugging.
+</dd><dt>Version 2.3.2</dt><dd> Add execPrint, execWithCallback, and interruptibly functions.
+Add bindings for sqlite3_last_insert_rowid and sqlite3_changes.  Change the
+Show instance of the Utf8 newtype to better match the IsString instance.
+</dd><dt>Version 2.3.1</dt><dd> Upgrade the bundled SQLite3 to 3.7.15.  Add bindings for
+sqlite3_interrupt.  Export Int rather than CInt.
+</dd><dt>Version 2.3</dt><dd> Mark some FFI calls <a href="../direct-sqlite-2.3.11/unsafe.html">unsafe</a>, for a substantial performance
+benefit.
+</dd><dt>Version 2.2.1</dt><dd> Bump down text library version to match with the
+latest Haskell Platform.
+</dd><dt>Version 2.2</dt><dd> actually does what version 2.1 claimed to, since the author
+made a mistake with git.
+</dd><dt>Version 2.1</dt><dd> improves handling of invalid UTF-8 and changes error handling
+to be more complete.  It also adds a build flag to build against the system
+sqlite instead of the bundled one, optionally (disabled by default).
+</dd><dt>Version 2.0</dt><dd> uses Text for strings instead of String.
+</dd><dt>Version 1.1.0.1</dt><dd> switches to the Faction packaging system and makes no other
+changes.
+</dd><dt>Version 1.1</dt><dd> adds the SQLite amalgamation file (version 3.7.5) to the
+project, so that there are no external dependencies.
+</dd></dl></div></div><div id="module-list"><p class="caption">Modules</p><ul><li><span id="control.n.1" class="module collapser" onclick="toggleSection('n.1')">Database</span><ul id="section.n.1" class="show"><li><span class="module"><span id="control.n.1.1" class="collapser" onclick="toggleSection('n.1.1')"> </span><a href="../direct-sqlite-2.3.11/Database-SQLite3.html">Database.SQLite3</a></span><ul id="section.n.1.1" class="show"><li><span class="module"><span id="control.n.1.1.1" class="collapser" onclick="toggleSection('n.1.1.1')"> </span><a href="../direct-sqlite-2.3.11/Database-SQLite3-Bindings.html">Database.SQLite3.Bindings</a></span><ul id="section.n.1.1.1" class="show"><li><span class="module"><a href="../direct-sqlite-2.3.11/Database-SQLite3-Bindings-Types.html">Database.SQLite3.Bindings.Types</a></span></li></ul></li><li><span class="module"><a href="../direct-sqlite-2.3.11/Database-SQLite3-Direct.html">Database.SQLite3.Direct</a></span></li></ul></li></ul></li></ul></div></div><div id="footer"><p>Produced by <a href="http://www.haskell.org/haddock/">Haddock</a> version 2.13.2.1</p></div></body></html>

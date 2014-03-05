@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+<key>CFBundleIdentifier</key>
+<string>haskell</string>
+<key>CFBundleName</key>
+<string>Haskell</string>
+<key>DocSetPlatformFamily</key>
+<string>haskell</string>
+<key>isDashDocset</key>
+<true/>
+<key>dashIndexFilePath</key>
+<string>index.html</string>
+</dict>
+</plist>

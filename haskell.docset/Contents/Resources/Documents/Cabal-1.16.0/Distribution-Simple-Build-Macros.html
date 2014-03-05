@@ -1,0 +1,11 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd"><html xmlns="http://www.w3.org/1999/xhtml"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"></meta><title>Distribution.Simple.Build.Macros</title><link href="ocean.css" rel="stylesheet" type="text/css" title="Ocean"></link><script src="haddock-util.js" type="text/javascript"></script><script type="text/javascript">//<![CDATA[
+window.onload = function () {pageLoad();setSynopsis("mini_Distribution-Simple-Build-Macros.html");};
+//]]>
+</script></head><body><div id="package-header"><ul class="links" id="page-menu"><li><a href="../Cabal-1.16.0/Distribution-Simple-Build-Macros.html">Source</a></li><li><a href="../Cabal-1.16.0/index.html">Contents</a></li><li><a href="../Cabal-1.16.0/doc-index.html">Index</a></li></ul><p class="caption">Cabal-1.16.0: A framework for packaging Haskell software</p></div><div id="content"><div id="module-header"><table class="info"><tr><th>Portability</th><td>portable</td></tr><tr><th>Maintainer</th><td>cabal-devel@haskell.org</td></tr><tr><th>Safe Haskell</th><td>None</td></tr></table><p class="caption">Distribution.Simple.Build.Macros</p></div><div id="description"><p class="caption">Description</p><div class="doc"><p>Generate cabal_macros.h - CPP macros for package version testing
+</p><p>When using CPP you get
+</p><pre> VERSION_&lt;package&gt;
+ MIN_VERSION_&lt;package&gt;(A,B,C)
+</pre><p>for each <em>package</em> in <code>build-depends</code>, which is true if the version of
+ <em>package</em> in use is <code>&gt;= A.B.C</code>, using the normal ordering on version
+ numbers.
+</p></div></div><div id="interface"><h1>Documentation</h1><div class="top"><p class="src"><a name="v:generate" class="def">generate</a> :: <a href="../Cabal-1.16.0/Distribution-PackageDescription.html#t:PackageDescription">PackageDescription</a> -&gt; <a href="../Cabal-1.16.0/Distribution-Simple-LocalBuildInfo.html#t:LocalBuildInfo">LocalBuildInfo</a> -&gt; <a href="../base-4.6.0.1/Data-String.html#t:String">String</a><a href="../Cabal-1.16.0/Distribution-Simple-Build-Macros.html#generate" class="link">Source</a></p></div></div></div><div id="footer"><p>Produced by <a href="http://www.haskell.org/haddock/">Haddock</a> version 2.13.2</p></div></body></html>
