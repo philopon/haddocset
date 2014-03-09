@@ -9,6 +9,7 @@
 import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.IO.Class
+import           Control.Exception
 
 import qualified Filesystem                        as P
 import qualified Filesystem.Path.CurrentOS         as P
@@ -288,8 +289,11 @@ addSinglePackage o conn iFile = go `catchIOError` handler
     go = do
         docFiles (sourcePackageId iFile) (haddockHTMLs iFile)
             $$ (if optQuiet o then id else (progress False  10 '.' =$)) (copyDocument $ optDocumentsDir o)
-        moduleProvider iFile
-            $$ (if optQuiet o then id else (progress True  100 '*' =$)) (CL.mapM_ (liftIO . dispatchProvider conn (optHaddockDir o)))
+        Sql.execute_ conn "BEGIN;"
+        ( moduleProvider iFile
+            $$ (if optQuiet o then id else (progress True  100 '*' =$)) (CL.mapM_ (liftIO . dispatchProvider conn (optHaddockDir o))))
+            `onException` (Sql.execute_ conn "ROLLBACK;")
+        Sql.execute_ conn "COMMIT;"
     handler ioe
         | isDoesNotExistError ioe = print   ioe
         | otherwise               = ioError ioe
@@ -298,10 +302,8 @@ addSinglePackage o conn iFile = go `catchIOError` handler
 addCommand :: Options -> IO ()
 addCommand o = do
     conn <- Sql.open . P.encodeString $ optTarget o P.</> "Contents/Resources/docSet.dsidx"
-    Sql.execute_ conn "BEGIN;"
     forM_ (toAddConfs $ optCommand o) $ \i -> go conn i
         `catchIOError` handler
-    Sql.execute_ conn "COMMIT;"
     haddockIndex o
   where
     go conn p = parseConf p >>= \mbIFile -> case mbIFile of
