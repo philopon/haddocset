@@ -227,13 +227,13 @@ populateFunction conn pkg modn name =
           | Ghc.isDataConName name -> "Constructor"
           | otherwise              -> "Function"
 
-progress :: MonadIO m => Int -> ConduitM o o m ()
-progress u = sub 1
+progress :: MonadIO m => Bool -> Int -> Char -> ConduitM o o m ()
+progress cr u c = sub 1
   where
     sub n = await >>= \mbi -> case mbi of
-        Nothing -> liftIO (hPutChar stderr '\n' >> hFlush stderr)
+        Nothing -> when cr $ liftIO (hPutChar stderr '\n' >> hFlush stderr)
         Just i  -> do
-            when (n `mod` u == 0) $ liftIO (hPutChar stderr '.' >> hFlush stderr)
+            when (n `mod` u == 0) $ liftIO (hPutChar stderr c >> hFlush stderr)
             yield i
             sub (succ n)
 
@@ -248,15 +248,15 @@ dispatchProvider conn _ (Function p m n) = populateFunction conn p m n
 
 createCommand :: Options -> IO ()
 createCommand o = do
-    unless (optQuiet o) $ putStrLn "[1/6] Create Directory."
+    unless (optQuiet o) $ putStrLn "[1/5] Create Directory."
     P.createDirectory False (optTarget o) -- for fail when directory already exists.
     P.createTree           (optDocumentsDir o)
     P.createDirectory True (optHaddockDir o)
 
-    unless (optQuiet o) $ putStrLn "[2/6] Writing plist."
+    unless (optQuiet o) $ putStrLn "[2/5] Writing plist."
     writeFile (P.encodeString $ optTarget o P.</> "Contents/Info.plist") $ showPlist (createPlist $ optCommand o)
 
-    unless (optQuiet o) $ putStrLn "[3/6] Migrate Database."
+    unless (optQuiet o) $ putStrLn "[3/5] Migrate Database."
     conn <- Sql.open . P.encodeString $ optTarget o P.</> "Contents/Resources/docSet.dsidx"
     Sql.execute_ conn "CREATE TABLE searchIndex(id INTEGER PRIMARY KEY, name TEXT, type TEXT, path TEXT, package TEXT);"
     Sql.execute_ conn "CREATE UNIQUE INDEX anchor ON searchIndex (name, type, path, package);"
@@ -266,18 +266,13 @@ createCommand o = do
     iFiles <- fmap (filter exposed . catMaybes) $ mapM (parseConf . (global P.</>)) =<< packageConfs global
     unless (optQuiet o) $ putStr "    Global package count:     " >> print (length iFiles)
 
-    unless (optQuiet o) $ putStrLn "[4/6] Copy Documents."
-    mapM_ (\i -> docFiles (sourcePackageId i) (haddockHTMLs i)) iFiles
-        $$ (if optQuiet o then id else (progress 10 =$)) (copyDocument $ optDocumentsDir o)
+    
+    unless (optQuiet o) $ putStrLn "[4/5] Copy and populate Documents."
+    forM_ iFiles $ \iFile -> addSinglePackage o conn iFile
 
-    unless (optQuiet o) $ putStrLn "[5/6] Populate database index."
-    Sql.execute_ conn "BEGIN;"
-    mapM_ moduleProvider iFiles
-        $$ (if optQuiet o then id else (progress 100 =$)) (CL.mapM_ $ liftIO . dispatchProvider conn (optHaddockDir o))
-    Sql.execute_ conn "COMMIT;"
-
-    unless (optQuiet o) $ putStrLn "[6/6] Create index."
+    unless (optQuiet o) $ putStrLn "[5/5] Create index."
     haddockIndex o
+
 
 haddockIndex :: Options -> IO ()
 haddockIndex o = do
@@ -286,6 +281,19 @@ haddockIndex o = do
                ',': P.encodeString h) <$> P.listDirectory (optHaddockDir o)
 
     haddock $ "--gen-index": "--gen-contents": ("--odir=" ++ P.encodeString (optDocumentsDir o)): argIs
+
+addSinglePackage :: Options -> Sql.Connection -> InstalledPackageInfo -> IO ()
+addSinglePackage o conn iFile = go `catchIOError` handler
+  where 
+    go = do
+        docFiles (sourcePackageId iFile) (haddockHTMLs iFile)
+            $$ (if optQuiet o then id else (progress False  10 '.' =$)) (copyDocument $ optDocumentsDir o)
+        moduleProvider iFile
+            $$ (if optQuiet o then id else (progress True  100 '*' =$)) (CL.mapM_ (liftIO . dispatchProvider conn (optHaddockDir o)))
+    handler ioe
+        | isDoesNotExistError ioe = print   ioe
+        | otherwise               = ioError ioe
+
 
 addCommand :: Options -> IO ()
 addCommand o = do
@@ -298,11 +306,7 @@ addCommand o = do
   where
     go conn p = parseConf p >>= \mbIFile -> case mbIFile of
         Nothing    -> return ()
-        Just iFile -> do
-            docFiles (sourcePackageId iFile) (haddockHTMLs iFile)
-                $$ copyDocument (optDocumentsDir o)
-            moduleProvider iFile
-                $$ CL.mapM_ (liftIO . dispatchProvider conn (optHaddockDir o))
+        Just iFile -> addSinglePackage o conn iFile
     handler ioe
             | isDoesNotExistError ioe = print ioe
             | otherwise               = ioError ioe
