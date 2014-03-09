@@ -27,7 +27,8 @@ import           Text.HTML.TagSoup.Match           as Ts
 
 import           Distribution.InstalledPackageInfo
 import           Distribution.Package
-import           Distribution.Text                 (display)
+import           Distribution.Compat.ReadP
+import           Distribution.Text                 (display, parse)
 import           Documentation.Haddock
 import qualified Module                            as Ghc
 import qualified Name                              as Ghc
@@ -52,17 +53,39 @@ packageConfs :: P.FilePath -> IO [P.FilePath]
 packageConfs dir =
     filter ((== Just "conf") . P.extension) <$> P.listDirectory dir
 
-parseConf :: P.FilePath -> IO (Maybe InstalledPackageInfo)
-parseConf pifile = do
-    result <- parseInstalledPackageInfo <$> readFile (P.encodeString pifile)
-    return $ case result of
-        ParseFailed _ -> Nothing
-        ParseOk [] a
-            | null (haddockHTMLs a)      -> Nothing
-            | null (haddockInterfaces a) -> Nothing
-            | otherwise -> Just a
+data DocInfo = DocInfo 
+    { diPackageId  :: PackageId
+    , diInterfaces :: [P.FilePath]
+    , diHTMLs      :: [P.FilePath]
+    , diExposed    :: Bool
+    } deriving Show
 
-        ParseOk _  _  -> Nothing
+readDocInfoFile :: P.FilePath -> IO (Maybe DocInfo)
+readDocInfoFile pifile = P.isDirectory pifile >>= \isDir ->
+    if isDir
+    then filter ((== Just "haddock") . P.extension) <$> P.listDirectory pifile >>= \hdc -> case hdc of
+        []       -> return Nothing
+        hs@(h:_) -> readInterfaceFile freshNameCache (P.encodeString h) >>= \ei -> case ei of
+            Left _     -> return Nothing
+            Right (InterfaceFile _ (intf:_)) -> do
+                let rPkg = readP_to_S parse . Ghc.packageIdString . Ghc.modulePackageId $ instMod intf :: [(PackageId, String)]
+                case rPkg of
+                    []  -> return Nothing
+                    pkg -> do
+                        return . Just $ DocInfo (fst $ last pkg) hs [P.collapse $ pifile P.</> P.decodeString "./" ] True
+            Right _ -> return Nothing
+    else do
+        result <- parseInstalledPackageInfo <$> readFile (P.encodeString pifile)
+        return $ case result of
+            ParseFailed _ -> Nothing
+            ParseOk [] a
+                | null (haddockHTMLs a)      -> Nothing
+                | null (haddockInterfaces a) -> Nothing
+                | otherwise -> Just $
+                    DocInfo (sourcePackageId a) (map P.decodeString $ haddockInterfaces a) 
+                            (map (P.decodeString . (++"/")) $ haddockHTMLs a) (exposed a)
+
+            ParseOk _  _  -> Nothing
 
 data Plist = Plist
     { cfBundleIdentifier   :: String
@@ -139,6 +162,7 @@ data DocFile = DocFile
     , docRationalDir :: P.FilePath
     } deriving Show
 
+
 docAbsolute :: DocFile -> P.FilePath
 docAbsolute doc = docBaseDir doc P.</> docRationalDir doc
 
@@ -157,12 +181,11 @@ copyDocument docdir = awaitForever $ \doc -> do
         Just "haddock" -> return ()
         _              -> liftIO $ P.copyFile full dst
 
-docFiles :: MonadIO m => PackageId -> [FilePath] -> Producer m DocFile
+docFiles :: MonadIO m => PackageId -> [P.FilePath] -> Producer m DocFile
 docFiles sourcePackageId haddockHTMLs =
-    forM_ haddockHTMLs $ \d ->
-        let dir = P.decodeString $ d ++ "/"
-        in P.traverse False dir
-            =$= awaitForever (\f -> yield $ DocFile sourcePackageId dir $ fromMaybe (error $ show (dir ,f)) $ P.stripPrefix dir f)
+    forM_ haddockHTMLs $ \dir ->
+        P.traverse False dir
+            =$= awaitForever (\f -> yield $ DocFile sourcePackageId dir $ fromMaybe (error $ "Prefix missmatch: " ++ show (dir ,f)) $ P.stripPrefix dir f)
 
 data Provider
     = Haddock  PackageId P.FilePath
@@ -170,17 +193,17 @@ data Provider
     | Module   PackageId Ghc.Module
     | Function PackageId Ghc.Module Ghc.Name
 
-moduleProvider :: MonadIO m => InstalledPackageInfo -> Producer m Provider
+moduleProvider :: MonadIO m => DocInfo -> Producer m Provider
 moduleProvider iFile =
-    mapM_ sub $ haddockInterfaces iFile
+    mapM_ sub $ diInterfaces iFile
   where
     sub file = do
-        rd <- liftIO $ readInterfaceFile freshNameCache file
+        rd <- liftIO $ readInterfaceFile freshNameCache (P.encodeString file)
         case rd of
             Left _ -> return ()
             Right (ifInstalledIfaces -> iIntrf) -> do
-                let pkg = sourcePackageId iFile
-                yield $ Haddock pkg (P.decodeString file)
+                let pkg = diPackageId iFile
+                yield $ Haddock pkg file
                 yield $ Package pkg
                 forM_ iIntrf $ \i -> do
                     let modn = instMod i
@@ -262,12 +285,13 @@ createCommand o = do
     Sql.execute_ conn "CREATE TABLE searchIndex(id INTEGER PRIMARY KEY, name TEXT, type TEXT, path TEXT, package TEXT);"
     Sql.execute_ conn "CREATE UNIQUE INDEX anchor ON searchIndex (name, type, path, package);"
 
-    global <- globalPackageDirectory (optHcPkg o)
-    unless (optQuiet o) $ putStr "    Global package directory: " >> putStrLn (P.encodeString global)
-    iFiles <- fmap (filter exposed . catMaybes) $ mapM (parseConf . (global P.</>)) =<< packageConfs global
-    unless (optQuiet o) $ putStr "    Global package count:     " >> print (length iFiles)
+    globalDir <- globalPackageDirectory (optHcPkg o)
+    unless (optQuiet o) $ putStr "    Global package directory: " >> putStrLn (P.encodeString globalDir)
+    globals <- map (globalDir P.</>) <$> packageConfs globalDir
+    let locals = toAddFiles $ optCommand o
+    iFiles <- filter diExposed . catMaybes <$> mapM readDocInfoFile (globals ++ locals)
+    unless (optQuiet o) $ putStr "    Global package count:     " >> print (length globals)
 
-    
     unless (optQuiet o) $ putStrLn "[4/5] Copy and populate Documents."
     forM_ iFiles $ \iFile -> addSinglePackage o conn iFile
 
@@ -283,11 +307,12 @@ haddockIndex o = do
 
     haddock $ "--gen-index": "--gen-contents": ("--odir=" ++ P.encodeString (optDocumentsDir o)): argIs
 
-addSinglePackage :: Options -> Sql.Connection -> InstalledPackageInfo -> IO ()
+addSinglePackage :: Options -> Sql.Connection -> DocInfo -> IO ()
 addSinglePackage o conn iFile = go `catchIOError` handler
   where 
     go = do
-        docFiles (sourcePackageId iFile) (haddockHTMLs iFile)
+        putStr "    " >> putStr (display $ diPackageId iFile) >> putChar ' ' >> hFlush stdout
+        docFiles (diPackageId iFile) (diHTMLs iFile)
             $$ (if optQuiet o then id else (progress False  10 '.' =$)) (copyDocument $ optDocumentsDir o)
         Sql.execute_ conn "BEGIN;"
         ( moduleProvider iFile
@@ -295,18 +320,18 @@ addSinglePackage o conn iFile = go `catchIOError` handler
             `onException` (Sql.execute_ conn "ROLLBACK;")
         Sql.execute_ conn "COMMIT;"
     handler ioe
-        | isDoesNotExistError ioe = print   ioe
+        | isDoesNotExistError ioe = putStr "Error: " >> print   ioe
         | otherwise               = ioError ioe
 
 
 addCommand :: Options -> IO ()
 addCommand o = do
     conn <- Sql.open . P.encodeString $ optTarget o P.</> "Contents/Resources/docSet.dsidx"
-    forM_ (toAddConfs $ optCommand o) $ \i -> go conn i
+    forM_ (toAddFiles $ optCommand o) $ \i -> go conn i
         `catchIOError` handler
     haddockIndex o
   where
-    go conn p = parseConf p >>= \mbIFile -> case mbIFile of
+    go conn p = readDocInfoFile p >>= \mbIFile -> case mbIFile of
         Nothing    -> return ()
         Just iFile -> addSinglePackage o conn iFile
     handler ioe
@@ -330,9 +355,9 @@ optHaddockDir   opt = optTarget opt P.</> "Contents/Resources/Haddock/"
 optDocumentsDir opt = optTarget opt P.</> "Contents/Resources/Documents/"
 
 data Command
-    = Create { createPlist :: Plist }
+    = Create { createPlist :: Plist, toAddFiles :: [P.FilePath] }
     | List
-    | Add    { toAddConfs :: [P.FilePath] }
+    | Add    { toAddFiles :: [P.FilePath] }
     deriving Show
 
 main :: IO ()
@@ -353,9 +378,12 @@ main = do
                           <> command "list"   (info (pure List) $ progDesc "list package of docset.")
                           <> command "add"    (info addOpts $ progDesc "add package to docset."))
 
-    createOpts = fmap Create $ Plist
-                 <$> (strOption (long "CFBundleIdentifier")   <|> pure "haskell")
-                 <*> (strOption (long "CFBundleName")         <|> pure "Haskell")
-                 <*> (strOption (long "DocSetPlatformFamily") <|> pure "haskell")
+    createOpts = Create
+                 <$> ( Plist
+                         <$> (strOption (long "CFBundleIdentifier")   <|> pure "haskell")
+                         <*> (strOption (long "CFBundleName")         <|> pure "Haskell")
+                         <*> (strOption (long "DocSetPlatformFamily") <|> pure "haskell"))
+                 <*> arguments (Just . P.decodeString) (metavar "CONFS" <> help "path to installed package configuration.")
+
     addOpts    = Add <$> arguments1 (Just . P.decodeString) (metavar "CONFS" <> help "path to installed package configuration.")
 
