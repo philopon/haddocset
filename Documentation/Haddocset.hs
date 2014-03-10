@@ -1,15 +1,17 @@
-{-# LANGUAGE NamedFieldPuns            #-}
-{-# LANGUAGE OverloadedStrings         #-}
-{-# LANGUAGE Rank2Types                #-}
-{-# LANGUAGE RecordWildCards           #-}
-{-# LANGUAGE StandaloneDeriving        #-}
-{-# LANGUAGE TupleSections             #-}
-{-# LANGUAGE ViewPatterns              #-}
+{-# LANGUAGE NamedFieldPuns     #-}
+{-# LANGUAGE OverloadedStrings  #-}
+{-# LANGUAGE Rank2Types         #-}
+{-# LANGUAGE RecordWildCards    #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TupleSections      #-}
+{-# LANGUAGE ViewPatterns       #-}
+
+module Documentation.Haddocset where
 
 import           Control.Applicative
+import           Control.Exception
 import           Control.Monad
 import           Control.Monad.IO.Class
-import           Control.Exception
 
 import qualified Filesystem                        as P
 import qualified Filesystem.Path.CurrentOS         as P
@@ -25,9 +27,9 @@ import qualified Data.Text                         as T
 import           Text.HTML.TagSoup                 as Ts
 import           Text.HTML.TagSoup.Match           as Ts
 
+import           Distribution.Compat.ReadP
 import           Distribution.InstalledPackageInfo
 import           Distribution.Package
-import           Distribution.Compat.ReadP
 import           Distribution.Text                 (display, parse)
 import           Documentation.Haddock
 import qualified Module                            as Ghc
@@ -36,8 +38,6 @@ import qualified Name                              as Ghc
 import           Data.Conduit
 import qualified Data.Conduit.Filesystem           as P
 import qualified Data.Conduit.List                 as CL
-
-import           Options.Applicative
 
 docsetDir :: P.FilePath -> P.FilePath
 docsetDir d =
@@ -53,7 +53,7 @@ packageConfs :: P.FilePath -> IO [P.FilePath]
 packageConfs dir =
     filter ((== Just "conf") . P.extension) <$> P.listDirectory dir
 
-data DocInfo = DocInfo 
+data DocInfo = DocInfo
     { diPackageId  :: PackageId
     , diInterfaces :: [P.FilePath]
     , diHTMLs      :: [P.FilePath]
@@ -82,7 +82,7 @@ readDocInfoFile pifile = P.isDirectory pifile >>= \isDir ->
                 | null (haddockHTMLs a)      -> Nothing
                 | null (haddockInterfaces a) -> Nothing
                 | otherwise -> Just $
-                    DocInfo (sourcePackageId a) (map P.decodeString $ haddockInterfaces a) 
+                    DocInfo (sourcePackageId a) (map P.decodeString $ haddockInterfaces a)
                             (map (P.decodeString . (++"/")) $ haddockHTMLs a) (exposed a)
 
             ParseOk _  _  -> Nothing
@@ -270,120 +270,27 @@ dispatchProvider conn _ (Module p m)     = populateModule   conn p m
 dispatchProvider conn _ (Function p m n) = populateFunction conn p m n
 
 
-createCommand :: Options -> IO ()
-createCommand o = do
-    unless (optQuiet o) $ putStrLn "[1/5] Create Directory."
-    P.createDirectory False (optTarget o) -- for fail when directory already exists.
-    P.createTree           (optDocumentsDir o)
-    P.createDirectory True (optHaddockDir o)
-
-    unless (optQuiet o) $ putStrLn "[2/5] Writing plist."
-    writeFile (P.encodeString $ optTarget o P.</> "Contents/Info.plist") $ showPlist (createPlist $ optCommand o)
-
-    unless (optQuiet o) $ putStrLn "[3/5] Migrate Database."
-    conn <- Sql.open . P.encodeString $ optTarget o P.</> "Contents/Resources/docSet.dsidx"
-    Sql.execute_ conn "CREATE TABLE searchIndex(id INTEGER PRIMARY KEY, name TEXT, type TEXT, path TEXT, package TEXT);"
-    Sql.execute_ conn "CREATE UNIQUE INDEX anchor ON searchIndex (name, type, path, package);"
-
-    globalDir <- globalPackageDirectory (optHcPkg o)
-    unless (optQuiet o) $ putStr "    Global package directory: " >> putStrLn (P.encodeString globalDir)
-    globals <- map (globalDir P.</>) <$> packageConfs globalDir
-    let locals = toAddFiles $ optCommand o
-    iFiles <- filter diExposed . catMaybes <$> mapM readDocInfoFile (globals ++ locals)
-    unless (optQuiet o) $ putStr "    Global package count:     " >> print (length globals)
-
-    unless (optQuiet o) $ putStrLn "[4/5] Copy and populate Documents."
-    forM_ iFiles $ \iFile -> addSinglePackage o conn iFile
-
-    unless (optQuiet o) $ putStrLn "[5/5] Create index."
-    haddockIndex o
-
-
-haddockIndex :: Options -> IO ()
-haddockIndex o = do
+haddockIndex :: P.FilePath -> P.FilePath -> IO ()
+haddockIndex haddockdir documentdir = do
     argIs <- map (\h -> "--read-interface="
                ++   P.encodeString (P.dropExtension $ P.filename h) ++
-               ',': P.encodeString h) <$> P.listDirectory (optHaddockDir o)
+               ',': P.encodeString h) <$> P.listDirectory haddockdir
 
-    haddock $ "--gen-index": "--gen-contents": ("--odir=" ++ P.encodeString (optDocumentsDir o)): argIs
+    haddock $ "--gen-index": "--gen-contents": ("--odir=" ++ P.encodeString documentdir): argIs
 
-addSinglePackage :: Options -> Sql.Connection -> DocInfo -> IO ()
-addSinglePackage o conn iFile = go `catchIOError` handler
-  where 
+addSinglePackage :: Bool -> P.FilePath -> P.FilePath -> Sql.Connection -> DocInfo -> IO ()
+addSinglePackage quiet docDir haddockDir conn iFile = go `catchIOError` handler
+  where
     go = do
         putStr "    " >> putStr (display $ diPackageId iFile) >> putChar ' ' >> hFlush stdout
         docFiles (diPackageId iFile) (diHTMLs iFile)
-            $$ (if optQuiet o then id else (progress False  10 '.' =$)) (copyDocument $ optDocumentsDir o)
+            $$ (if quiet then id else (progress False  10 '.' =$)) (copyDocument docDir)
         Sql.execute_ conn "BEGIN;"
         ( moduleProvider iFile
-            $$ (if optQuiet o then id else (progress True  100 '*' =$)) (CL.mapM_ (liftIO . dispatchProvider conn (optHaddockDir o))))
+            $$ (if quiet then id else (progress True  100 '*' =$)) (CL.mapM_ (liftIO . dispatchProvider conn haddockDir)))
             `onException` (Sql.execute_ conn "ROLLBACK;")
         Sql.execute_ conn "COMMIT;"
     handler ioe
         | isDoesNotExistError ioe = putStr "Error: " >> print   ioe
         | otherwise               = ioError ioe
-
-
-addCommand :: Options -> IO ()
-addCommand o = do
-    conn <- Sql.open . P.encodeString $ optTarget o P.</> "Contents/Resources/docSet.dsidx"
-    forM_ (toAddFiles $ optCommand o) $ \i -> go conn i
-        `catchIOError` handler
-    haddockIndex o
-  where
-    go conn p = readDocInfoFile p >>= \mbIFile -> case mbIFile of
-        Nothing    -> return ()
-        Just iFile -> addSinglePackage o conn iFile
-    handler ioe
-            | isDoesNotExistError ioe = print ioe
-            | otherwise               = ioError ioe
-
-listCommand :: Options -> IO ()
-listCommand o =
-    mapM_ (putStrLn . P.encodeString . P.dropExtension . P.filename) =<< P.listDirectory (optHaddockDir o)
-
-data Options
-    = Options { optHcPkg   :: String
-              , optTarget  :: P.FilePath
-              , optQuiet   :: Bool
-              , optCommand :: Command
-              }
-    deriving Show
-
-optHaddockDir, optDocumentsDir :: Options -> P.FilePath
-optHaddockDir   opt = optTarget opt P.</> "Contents/Resources/Haddock/"
-optDocumentsDir opt = optTarget opt P.</> "Contents/Resources/Documents/"
-
-data Command
-    = Create { createPlist :: Plist, toAddFiles :: [P.FilePath] }
-    | List
-    | Add    { toAddFiles :: [P.FilePath] }
-    deriving Show
-
-main :: IO ()
-main = do
-    opts <- execParser optRule
-    case opts of
-        Options{optCommand = Create{}} -> createCommand opts
-        Options{optCommand = List}     -> listCommand   opts
-        Options{optCommand = Add{}}    -> addCommand    opts
-  where
-    optRule = info (helper <*> options) fullDesc
-    options = Options
-              <$> (strOption (long "hc-pkg" <> metavar "CMD" <> help "hc-pkg command (default: ghc-pkg)") <|> pure "ghc-pkg")
-              <*> fmap (docsetDir . P.decodeString)
-                  (strOption (long "target" <> short 't' <> metavar "DOCSET" <> help "output directory (default: haskell.docset)") <|> pure "haskell")
-              <*> switch (long "quiet" <> short 'q' <> help "suppress output.")
-              <*> subparser (command "create" (info createOpts  $ progDesc "crate new docset.")
-                          <> command "list"   (info (pure List) $ progDesc "list package of docset.")
-                          <> command "add"    (info addOpts $ progDesc "add package to docset."))
-
-    createOpts = Create
-                 <$> ( Plist
-                         <$> (strOption (long "CFBundleIdentifier")   <|> pure "haskell")
-                         <*> (strOption (long "CFBundleName")         <|> pure "Haskell")
-                         <*> (strOption (long "DocSetPlatformFamily") <|> pure "haskell"))
-                 <*> arguments (Just . P.decodeString) (metavar "CONFS" <> help "path to installed package configuration.")
-
-    addOpts    = Add <$> arguments1 (Just . P.decodeString) (metavar "CONFS" <> help "path to installed package configuration.")
 
