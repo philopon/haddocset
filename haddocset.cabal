@@ -17,18 +17,22 @@ executable haddocset
   main-is:             Main.hs
   other-modules:       Documentation.Haddocset
   ghc-options:         -Wall -O2
-  build-depends:       base                 >= 4.6
-                     , ghc                  >= 7.4
-                     , optparse-applicative >= 0.7
-                     , conduit              >= 1.0
-                     , filesystem-conduit   >= 1.0
-                     , tagsoup              >= 0.13
-                     , Cabal                >= 1.16
-                     , haddock              >= 2.13
-                     , text                 >= 1.0
-                     , sqlite-simple        >= 0.4.5
-                     , process              >= 1.1
-                     , system-filepath      >= 0.4
-                     , system-fileio        >= 0.3
-                     , transformers         >= 0.3
+  build-depends:       base                 >=4.6
+                     , ghc                  >=7.4
+                     , optparse-applicative >=0.7
+                     , conduit              >=1.0
+                     , filesystem-conduit   >=1.0
+                     , tagsoup              >=0.13
+                     , Cabal                >=1.16
+                     , text                 >=1.0
+                     , sqlite-simple        >=0.4.5
+                     , process              >=1.1
+                     , system-filepath      >=0.4
+                     , system-fileio        >=0.3
+                     , transformers         >=0.3
+  if impl(ghc >= 7.8)
+    build-depends:     haddock              >=2.14
+  else
+    build-depends:     haddock              >=2.13 && <2.14
+
   default-language:    Haskell2010
