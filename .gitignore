@@ -5,3 +5,4 @@ cabal.sandbox.config
 haddocset.hi
 haddocset.o
 haddocset
+*.docset

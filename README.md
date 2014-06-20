@@ -1,4 +1,4 @@
-haddocset
+haddocset [![Build Status](https://travis-ci.org/philopon/haddocset.svg?branch=master)](https://travis-ci.org/philopon/haddocset)
 ============
 Generate docset of Dash from Haddock
 
