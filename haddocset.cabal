@@ -1,7 +1,7 @@
 name:                haddocset
 version:             0.1.0
 synopsis:            Generate docset of Dash by Haddock haskell documentation tool
--- description:         
+description:         please read README.md <https://github.com/philopon/haddocset/blob/master/README.md>
 license:             BSD3
 license-file:        LICENSE
 author:              HirotomoMoriwaki<philopon.dependence@gmail.com>
