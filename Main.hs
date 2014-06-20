@@ -57,7 +57,7 @@ addCommand o = do
   where
     go conn p = readDocInfoFile p >>= \mbIFile -> case mbIFile of
         Nothing    -> return ()
-        Just iFile -> addSinglePackage (optQuiet o) (optHaddockDir o) (optDocumentsDir o) conn iFile
+        Just iFile -> addSinglePackage (optQuiet o) (optDocumentsDir o) (optHaddockDir o) conn iFile
     handler ioe
             | isDoesNotExistError ioe = print ioe
             | otherwise               = ioError ioe
