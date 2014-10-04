@@ -31,7 +31,7 @@ executable haddocset
                      , system-fileio        >=0.3
                      , transformers         >=0.3
   if impl(ghc >= 7.8)
-    build-depends:     haddock              >=2.14
+    build-depends:     haddock-api          >=2.15
   else
     build-depends:     haddock              >=2.13 && <2.14
 
