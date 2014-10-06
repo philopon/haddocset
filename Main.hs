@@ -107,7 +107,7 @@ main = do
                          <$> (strOption (long "CFBundleIdentifier")   <|> pure "haskell")
                          <*> (strOption (long "CFBundleName")         <|> pure "Haskell")
                          <*> (strOption (long "DocSetPlatformFamily") <|> pure "haskell"))
-                 <*> many (argument (Just . P.decodeString) (metavar "CONFS" <> help "path to installed package configuration."))
+                 <*> many (argument (P.decodeString <$> str) (metavar "CONFS" <> help "path to installed package configuration."))
 
-    addOpts    = Add <$> some (argument (Just . P.decodeString) (metavar "CONFS" <> help "path to installed package configuration."))
+    addOpts    = Add <$> some (argument (P.decodeString <$> str) (metavar "CONFS" <> help "path to installed package configuration."))
 
