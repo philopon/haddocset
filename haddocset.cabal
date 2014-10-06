@@ -1,5 +1,5 @@
 name:                haddocset
-version:             0.1.0
+version:             0.2.0
 synopsis:            Generate docset of Dash by Haddock haskell documentation tool
 description:         please read README.md <https://github.com/philopon/haddocset/blob/master/README.md>
 license:             BSD3
@@ -17,21 +17,24 @@ executable haddocset
   main-is:             Main.hs
   other-modules:       Documentation.Haddocset
   ghc-options:         -Wall -O2
-  build-depends:       base                 >=4.6 && <4.8
-                     , ghc                  >=7.4
-                     , optparse-applicative >=0.7
-                     , conduit              >=1.0
-                     , filesystem-conduit   >=1.0
-                     , tagsoup              >=0.13
-                     , Cabal                >=1.16
-                     , text                 >=1.0
-                     , sqlite-simple        >=0.4.5
-                     , process              >=1.1
-                     , system-filepath      >=0.4
-                     , system-fileio        >=0.3
-                     , transformers         >=0.3
+  build-depends:       base                 >=4.6   && <4.8
+                     , ghc                  >=7.4   && <7.9
+                     , optparse-applicative >=0.11  && <0.12
+                     , conduit              >=1.0   && <1.3
+                     , conduit-extra        >=1.1   && <1.2
+                     , tagsoup              >=0.13  && <1.4
+                     , Cabal                >=1.16  && <1.21
+                     , text                 >=1.0   && <1.3
+                     , sqlite-simple        >=0.4.5 && <0.5
+                     , process              >=1.1   && <1.3
+                     , system-filepath      >=0.4   && <0.5
+                     , system-fileio        >=0.3   && <0.4
+                     , transformers         >=0.3   && <0.5
+                     , exceptions           >=0.6   && <0.7
+                     , resourcet            >=1.1   && <1.2
+                     , mtl                  >=2.0   && <2.2
   if impl(ghc >= 7.8)
-    build-depends:     haddock              >=2.14
+    build-depends:     haddock-api          >=2.15
   else
     build-depends:     haddock              >=2.13 && <2.14
 

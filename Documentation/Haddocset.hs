@@ -9,15 +9,16 @@
 module Documentation.Haddocset where
 
 import           Control.Applicative
-import           Control.Exception
+import           Control.Monad.Catch
 import           Control.Monad
+import           Control.Monad.Trans.Resource
 import           Control.Monad.IO.Class
 
 import qualified Filesystem                        as P
 import qualified Filesystem.Path.CurrentOS         as P
 
 import           System.IO
-import           System.IO.Error
+import           System.IO.Error(mkIOError, alreadyExistsErrorType, isDoesNotExistError)
 import           System.Process
 
 import qualified Database.SQLite.Simple            as Sql
@@ -175,17 +176,17 @@ copyDocument docdir = awaitForever $ \doc -> do
               P.</> docRationalDir doc
     liftIO $ P.createTree (P.directory dst)
     ex <- liftIO $ (||) <$> P.isFile dst <*> P.isDirectory dst
-    when ex $ monadThrow $ mkIOError alreadyExistsErrorType "copyDocument" Nothing (Just $ P.encodeString dst)
+    when ex $ throwM $ mkIOError alreadyExistsErrorType "copyDocument" Nothing (Just $ P.encodeString dst)
     case P.extension $ docRationalDir doc of
         Just "html"    -> liftIO $ copyHtml doc dst
         Just "haddock" -> return ()
         _              -> liftIO $ P.copyFile full dst
 
-docFiles :: MonadIO m => PackageId -> [P.FilePath] -> Producer m DocFile
+docFiles :: (MonadIO m, MonadResource m) => PackageId -> [P.FilePath] -> Producer m DocFile
 docFiles sourcePackageId haddockHTMLs =
     forM_ haddockHTMLs $ \dir ->
-        P.traverse False dir
-            =$= awaitForever (\f -> yield $ DocFile sourcePackageId dir $ fromMaybe (error $ "Prefix missmatch: " ++ show (dir ,f)) $ P.stripPrefix dir f)
+        P.sourceDirectoryDeep False (P.encodeString dir)
+            =$= awaitForever (\f -> yield $ DocFile sourcePackageId dir $ fromMaybe (error $ "Prefix missmatch: " ++ show (dir ,f)) $ P.stripPrefix dir (P.decodeString f))
 
 data Provider
     = Haddock  PackageId P.FilePath
@@ -283,7 +284,7 @@ addSinglePackage quiet docDir haddockDir conn iFile = go `catchIOError` handler
   where
     go = do
         putStr "    " >> putStr (display $ diPackageId iFile) >> putChar ' ' >> hFlush stdout
-        docFiles (diPackageId iFile) (diHTMLs iFile)
+        runResourceT $ docFiles (diPackageId iFile) (diHTMLs iFile)
             $$ (if quiet then id else (progress False  10 '.' =$)) (copyDocument docDir)
         Sql.execute_ conn "BEGIN;"
         ( moduleProvider iFile
