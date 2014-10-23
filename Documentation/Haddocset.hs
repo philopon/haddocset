@@ -279,11 +279,14 @@ haddockIndex haddockdir documentdir = do
 
     haddock $ "--gen-index": "--gen-contents": ("--odir=" ++ P.encodeString documentdir): argIs
 
-addSinglePackage :: Bool -> P.FilePath -> P.FilePath -> Sql.Connection -> DocInfo -> IO ()
-addSinglePackage quiet docDir haddockDir conn iFile = go `catchIOError` handler
+--        dst = docdir
+--              P.</> (P.decodeString . display) (docPackage doc)
+addSinglePackage :: Bool -> Bool -> P.FilePath -> P.FilePath -> Sql.Connection -> DocInfo -> IO ()
+addSinglePackage quiet force docDir haddockDir conn iFile = go `catchIOError` handler
   where
     go = do
         putStr "    " >> putStr (display $ diPackageId iFile) >> putChar ' ' >> hFlush stdout
+        when force $ P.removeTree $ docDir P.</> (P.decodeString . display) (diPackageId iFile)
         runResourceT $ docFiles (diPackageId iFile) (diHTMLs iFile)
             $$ (if quiet then id else (progress False  10 '.' =$)) (copyDocument docDir)
         Sql.execute_ conn "BEGIN;"
