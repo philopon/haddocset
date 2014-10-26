@@ -154,8 +154,9 @@ copyHtml doc dst = do
 relativize :: P.FilePath -> P.FilePath -> P.FilePath
 relativize base path = up P.</> p
     where pfx = P.commonPrefix [base, path]
-          up  = P.concat . flip replicate ".." . length . P.splitDirectories . fromMaybe (error "relativize") $ P.stripPrefix pfx base
-          p   = fromMaybe (error "relativize") $ P.stripPrefix pfx path
+          up  = P.concat . flip replicate ".." . length . P.splitDirectories . fromMaybe err $ P.stripPrefix pfx base
+          p   = fromMaybe err $ P.stripPrefix pfx path
+          err = error $ "relativize: " ++ show base ++ " -> " ++ show path
 
 data DocFile = DocFile
     { docPackage     :: PackageId
