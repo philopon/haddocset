@@ -43,13 +43,13 @@ createCommand o = do
     unless (optQuiet o) $ putStr "    Global package count:     " >> print (length globals)
 
     unless (optQuiet o) $ putStrLn "[4/5] Copy and populate Documents."
-    forM_ iFiles $ \iFile -> addSinglePackage (optQuiet o) (optDocumentsDir o) (optHaddockDir o) conn iFile
+    forM_ iFiles $ \iFile -> addSinglePackage (optQuiet o) False (optDocumentsDir o) (optHaddockDir o) conn iFile
 
     unless (optQuiet o) $ putStrLn "[5/5] Create index."
     haddockIndex (optHaddockDir o) (optDocumentsDir o)
 
-addCommand :: Options -> IO ()
-addCommand o = do
+addCommand :: Options -> Bool -> IO ()
+addCommand o force = do
     conn <- Sql.open . P.encodeString $ optTarget o P.</> "Contents/Resources/docSet.dsidx"
     forM_ (toAddFiles $ optCommand o) $ \i -> go conn i
         `catchIOError` handler
@@ -57,9 +57,9 @@ addCommand o = do
   where
     go conn p = readDocInfoFile p >>= \mbIFile -> case mbIFile of
         Nothing    -> return ()
-        Just iFile -> addSinglePackage (optQuiet o) (optDocumentsDir o) (optHaddockDir o) conn iFile
+        Just iFile -> addSinglePackage (optQuiet o) force (optDocumentsDir o) (optHaddockDir o) conn iFile
     handler ioe
-            | isDoesNotExistError ioe = print ioe
+            | isDoesNotExistError ioe = print   ioe
             | otherwise               = ioError ioe
 
 listCommand :: Options -> IO ()
@@ -81,33 +81,33 @@ optDocumentsDir opt = optTarget opt P.</> "Contents/Resources/Documents/"
 data Command
     = Create { createPlist :: Plist, toAddFiles :: [P.FilePath] }
     | List
-    | Add    { toAddFiles :: [P.FilePath] }
+    | Add    { toAddFiles :: [P.FilePath], forceAdd :: Bool }
     deriving Show
 
 main :: IO ()
 main = do
     opts <- execParser optRule
     case opts of
-        Options{optCommand = Create{}} -> createCommand opts
-        Options{optCommand = List}     -> listCommand   opts
-        Options{optCommand = Add{}}    -> addCommand    opts
+        Options{optCommand = Create{}}      -> createCommand opts
+        Options{optCommand = List}          -> listCommand   opts
+        Options{optCommand = Add{forceAdd}} -> addCommand    opts forceAdd
   where
     optRule = info (helper <*> options) fullDesc
     options = Options
-              <$> (strOption (long "hc-pkg" <> metavar "CMD" <> help "hc-pkg command (default: ghc-pkg)") <|> pure "ghc-pkg")
-              <*> fmap (docsetDir . P.decodeString)
-                  (strOption (long "target" <> short 't' <> metavar "DOCSET" <> help "output directory (default: haskell.docset)") <|> pure "haskell")
-              <*> switch (long "quiet" <> short 'q' <> help "suppress output.")
-              <*> subparser (command "create" (info createOpts  $ progDesc "crate new docset.")
-                          <> command "list"   (info (pure List) $ progDesc "list package of docset.")
-                          <> command "add"    (info addOpts $ progDesc "add package to docset."))
+        <$> (strOption (long "hc-pkg" <> metavar "CMD" <> help "hc-pkg command (default: ghc-pkg)") <|> pure "ghc-pkg")
+        <*> fmap (docsetDir . P.decodeString)
+            (strOption (long "target" <> short 't' <> metavar "DOCSET" <> help "output directory (default: haskell.docset)") <|> pure "haskell")
+        <*> switch (long "quiet" <> short 'q' <> help "suppress output.")
+        <*> subparser (command "create" (info createOpts  $ progDesc "crate new docset.")
+                    <> command "list"   (info (pure List) $ progDesc "list package of docset.")
+                    <> command "add"    (info addOpts $ progDesc "add package to docset."))
 
     createOpts = Create
-                 <$> ( Plist
-                         <$> (strOption (long "CFBundleIdentifier")   <|> pure "haskell")
-                         <*> (strOption (long "CFBundleName")         <|> pure "Haskell")
-                         <*> (strOption (long "DocSetPlatformFamily") <|> pure "haskell"))
-                 <*> many (argument (P.decodeString <$> str) (metavar "CONFS" <> help "path to installed package configuration."))
+        <$> ( Plist <$> (strOption (long "CFBundleIdentifier")   <|> pure "haskell")
+                    <*> (strOption (long "CFBundleName")         <|> pure "Haskell")
+                    <*> (strOption (long "DocSetPlatformFamily") <|> pure "haskell"))
+        <*> many (argument (P.decodeString <$> str) (metavar "CONFS" <> help "path to installed package configuration."))
 
-    addOpts    = Add <$> some (argument (P.decodeString <$> str) (metavar "CONFS" <> help "path to installed package configuration."))
-
+    addOpts = Add
+        <$> some (argument (P.decodeString <$> str) (metavar "CONFS" <> help "path to installed package configuration."))
+        <*> switch (long "force" <> short 'f' <> help "overwrite exist package.")
