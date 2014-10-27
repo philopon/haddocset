@@ -151,9 +151,16 @@ copyHtml doc dst = do
     packageLike p = let t = both $ P.toText p
                         in T.any (== '-') t && (T.all (`elem` "0123456789.") . T.takeWhile (/= '-') $ T.reverse t)
 
+commonPrefix :: P.FilePath -> P.FilePath -> P.FilePath
+commonPrefix a0 b0 = P.concat $ loop id (P.splitDirectories a0) (P.splitDirectories b0) where
+  loop f [] _  = f []
+  loop f _  [] = f []
+  loop f (a:as) (b:bs) | a == b    = loop (f . (a:)) as bs
+                       | otherwise = f []
+
 relativize :: P.FilePath -> P.FilePath -> P.FilePath
 relativize base path = up P.</> p
-    where pfx = P.commonPrefix [base, path]
+    where pfx = commonPrefix base path
           up  = P.concat . flip replicate ".." . length . P.splitDirectories . fromMaybe err $ P.stripPrefix pfx base
           p   = fromMaybe err $ P.stripPrefix pfx path
           err = error $ "relativize: " ++ show base ++ " -> " ++ show path
