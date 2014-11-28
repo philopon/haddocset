@@ -46,13 +46,22 @@ docsetDir d =
     then d
     else d P.<.> "docset"
 
-globalPackageDirectory :: FilePath -> IO P.FilePath
-globalPackageDirectory hcPkg =
-    P.decodeString . init . head . lines <$> readProcess hcPkg ["list"] ""
+globalPackageDirectories :: FilePath -> IO [P.FilePath]
+globalPackageDirectories hcPkg = do
+    ds <- map (P.decodeString . init) . filter isPkgDBLine . lines <$>
+        readProcess hcPkg ["list", "--global"] ""
+    forM ds $ \d -> P.isDirectory d >>= \isDir ->
+        if isDir
+        then return d
+        else return (P.directory d)
+  where
+    isPkgDBLine ""      = False
+    isPkgDBLine (' ':_) = False
+    isPkgDBLine _       = True
 
 packageConfs :: P.FilePath -> IO [P.FilePath]
 packageConfs dir =
-    filter ((== Just "conf") . P.extension) <$> P.listDirectory dir
+    filter (("package.cache" /=) . P.filename) <$> P.listDirectory dir
 
 data DocInfo = DocInfo
     { diPackageId  :: PackageId

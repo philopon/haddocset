@@ -35,9 +35,14 @@ createCommand o = do
     Sql.execute_ conn "CREATE TABLE searchIndex(id INTEGER PRIMARY KEY, name TEXT, type TEXT, path TEXT, package TEXT);"
     Sql.execute_ conn "CREATE UNIQUE INDEX anchor ON searchIndex (name, type, path, package);"
 
-    globalDir <- globalPackageDirectory (optHcPkg o)
-    unless (optQuiet o) $ putStr "    Global package directory: " >> putStrLn (P.encodeString globalDir)
-    globals <- map (globalDir P.</>) <$> packageConfs globalDir
+    globalDirs <- globalPackageDirectories (optHcPkg o)
+    unless (optQuiet o) $ do
+        putStr "    Global package directory: "
+        putStr (P.encodeString $ head globalDirs)
+        if length globalDirs > 1
+            then putStr " and " >> putStr (show . pred $ length globalDirs) >> putStrLn "directories."
+            else putStrLn ""
+    globals <- concat <$> mapM (\d -> map (d P.</>) <$> packageConfs d) globalDirs
     let locals = toAddFiles $ optCommand o
     iFiles <- filter diExposed . catMaybes <$> mapM readDocInfoFile (globals ++ locals)
     unless (optQuiet o) $ putStr "    Global package count:     " >> print (length globals)
