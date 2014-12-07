@@ -148,14 +148,15 @@ copyHtml doc dst = do
         Left  _ -> id
 
     both a = case a of
-        Left l -> l
+        Left  l -> l
         Right r -> r
 
     rebase p = let fil  = P.filename p
-                   pkgs = filter packageLike . reverse $ P.splitDirectories (P.parent p)
+                   pkgs = filter (\a -> a == "src" || packageLike a) . reverse $ P.splitDirectories (P.parent p)
                in case pkgs of
-                   []    -> fil
-                   pkg:_ -> relativize (P.decodeString . display . packageName $ docPackage doc) $ pkg P.</> fil
+                   []          -> fil
+                   "src":pkg:_ -> relativize (P.decodeString . display . packageName $ docPackage doc) $ pkg P.</> "src" P.</> fil
+                   pkg:_       -> relativize (P.decodeString . display . packageName $ docPackage doc) $ pkg P.</> fil
 
     packageLike p = let t = both $ P.toText p
                         in T.any (== '-') t && (T.all (`elem` "0123456789.") . T.takeWhile (/= '-') $ T.reverse t)
