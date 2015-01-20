@@ -130,15 +130,23 @@ copyHtml doc dst = do
   where
     mapFunc tag
         | Ts.tagOpenLit "a" (Ts.anyAttrNameLit "href") tag =
-            let url    = Ts.fromAttrib "href" tag
-                absp p = P.collapse $ docBaseDir doc P.</> P.fromText p
+            let absp p = P.collapse $ docBaseDir doc P.</> P.fromText p
                 attr   = filter (\(n,_) -> n /= "href") (getAttr tag)
-            in case url of
-                _ | "http://"  `T.isPrefixOf` url -> tag
-                  | "https://" `T.isPrefixOf` url -> tag
-                  | "file:///" `T.isPrefixOf` url -> Ts.TagOpen "a" (toAttr "href" (rebase . P.fromText $ T.drop 7 url) attr)
-                  | otherwise                     -> Ts.TagOpen "a" (toAttr "href" (rebase . absp       $          url) attr)
+            in case Ts.fromAttrib "href" tag of
+                url | "http://"  `T.isPrefixOf` url -> tag
+                    | "https://" `T.isPrefixOf` url -> tag
+                    | "file:///" `T.isPrefixOf` url -> Ts.TagOpen "a" (toAttr "href" (rebase . P.fromText $ T.drop 7 url) attr)
+                    | "#"        `T.isPrefixOf` url -> Ts.TagOpen "a" (toAttr "href" (rebase $ addHash url dst) attr)
+                    | otherwise                     -> Ts.TagOpen "a" (toAttr "href" (rebase . absp       $          url) attr)
+        | Ts.tagOpenLit "a" (Ts.anyAttrNameLit "name") tag =
+            let Ts.TagOpen _ attr = tag
+                hash = '#' `T.cons` Ts.fromAttrib "name" tag
+            in Ts.TagOpen "a" (toAttr "href" (rebase $ addHash hash dst) attr)
         | otherwise = tag
+
+    addHash h file = P.dirname file P.</> case P.toText $ P.filename file of
+        Right r -> P.fromText $ r `T.append` h
+        Left  _ -> ""
 
     getAttr (TagOpen _ a) = a
     getAttr _             = error "copyHtml: call attr to !TagOpen."
@@ -151,12 +159,14 @@ copyHtml doc dst = do
         Left  l -> l
         Right r -> r
 
-    rebase p = let fil  = P.filename p
-                   pkgs = filter (\a -> a == "src" || packageLike a) . reverse $ P.splitDirectories (P.parent p)
-               in case pkgs of
-                   []          -> fil
-                   "src":pkg:_ -> relativize (P.decodeString . display . packageName $ docPackage doc) $ pkg P.</> "src" P.</> fil
-                   pkg:_       -> relativize (P.decodeString . display . packageName $ docPackage doc) $ pkg P.</> fil
+    rebase p =
+        let file    = P.filename p
+            isSrc   = "src" `elem` P.splitDirectories (P.parent p)
+            srcNize = if isSrc then ("src" P.</>) else id
+            pkgs    = filter packageLike . reverse $ P.splitDirectories (P.parent p)
+        in case pkgs of
+            []    -> file
+            pkg:_ -> ".." P.</> pkg P.</> srcNize file
 
     packageLike p = let t = both $ P.toText p
                         in T.any (== '-') t && (T.all (`elem` "0123456789.") . T.takeWhile (/= '-') $ T.reverse t)
@@ -167,13 +177,6 @@ commonPrefix a0 b0 = P.concat $ loop id (P.splitDirectories a0) (P.splitDirector
   loop f _  [] = f []
   loop f (a:as) (b:bs) | a == b    = loop (f . (a:)) as bs
                        | otherwise = f []
-
-relativize :: P.FilePath -> P.FilePath -> P.FilePath
-relativize base path = up P.</> p
-    where pfx = commonPrefix base path
-          up  = P.concat . flip replicate ".." . length . P.splitDirectories . fromMaybe err $ P.stripPrefix pfx base
-          p   = fromMaybe err $ P.stripPrefix pfx path
-          err = error $ "relativize: " ++ show base ++ " -> " ++ show path
 
 data DocFile = DocFile
     { docPackage     :: PackageId
