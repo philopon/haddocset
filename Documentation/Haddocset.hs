@@ -81,11 +81,11 @@ readDocInfoFile pifile = P.isDirectory pifile >>= \isDir ->
         hs@(h:_) -> readInterfaceFile freshNameCache (P.encodeString h) >>= \ei -> case ei of
             Left _     -> return Nothing
             Right (InterfaceFile _ (intf:_)) -> do
-                #if MIN_VERSION_ghc(7,10,0)
+#if MIN_VERSION_ghc(7,10,0)
                 let rPkg = readP_to_S parse . Ghc.packageKeyString . Ghc.modulePackageKey $ instMod intf :: [(PackageId, String)]
-                #else
+#else
                 let rPkg = readP_to_S parse . Ghc.packageIdString . Ghc.modulePackageId $ instMod intf :: [(PackageId, String)]
-                #endif
+#endif
                 case rPkg of
                     []  -> return Nothing
                     pkg -> do
