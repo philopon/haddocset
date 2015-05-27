@@ -5,9 +5,13 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TupleSections      #-}
 {-# LANGUAGE ViewPatterns       #-}
+{-# LANGUAGE CPP                #-}
 
 module Documentation.Haddocset where
 
+#if !MIN_VERSION_base(4,8,0)
+import           Control.Applicative
+#endif
 import           Control.Monad.Catch
 import           Control.Monad
 import           Control.Monad.Trans.Resource
@@ -77,7 +81,11 @@ readDocInfoFile pifile = P.isDirectory pifile >>= \isDir ->
         hs@(h:_) -> readInterfaceFile freshNameCache (P.encodeString h) >>= \ei -> case ei of
             Left _     -> return Nothing
             Right (InterfaceFile _ (intf:_)) -> do
+                #if MIN_VERSION_ghc(7,10,0)
                 let rPkg = readP_to_S parse . Ghc.packageKeyString . Ghc.modulePackageKey $ instMod intf :: [(PackageId, String)]
+                #else
+                let rPkg = readP_to_S parse . Ghc.packageIdString . Ghc.modulePackageId $ instMod intf :: [(PackageId, String)]
+                #endif
                 case rPkg of
                     []  -> return Nothing
                     pkg -> do
