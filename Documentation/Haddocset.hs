@@ -5,10 +5,13 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TupleSections      #-}
 {-# LANGUAGE ViewPatterns       #-}
+{-# LANGUAGE CPP                #-}
 
 module Documentation.Haddocset where
 
+#if !MIN_VERSION_base(4,8,0)
 import           Control.Applicative
+#endif
 import           Control.Monad.Catch
 import           Control.Monad
 import           Control.Monad.Trans.Resource
@@ -78,7 +81,11 @@ readDocInfoFile pifile = P.isDirectory pifile >>= \isDir ->
         hs@(h:_) -> readInterfaceFile freshNameCache (P.encodeString h) >>= \ei -> case ei of
             Left _     -> return Nothing
             Right (InterfaceFile _ (intf:_)) -> do
+#if MIN_VERSION_ghc(7,10,0)
+                let rPkg = readP_to_S parse . Ghc.packageKeyString . Ghc.modulePackageKey $ instMod intf :: [(PackageId, String)]
+#else
                 let rPkg = readP_to_S parse . Ghc.packageIdString . Ghc.modulePackageId $ instMod intf :: [(PackageId, String)]
+#endif
                 case rPkg of
                     []  -> return Nothing
                     pkg -> do
@@ -114,7 +121,7 @@ showPlist Plist{..} = unlines
         , "<key>CFBundleName</key>"
         , "<string>" ++ cfBundleName ++ "</string>"
         , "<key>DocSetPlatformFamily</key>"
-        ,	"<string>" ++ docSetPlatformFamily ++ "</string>"
+        , "<string>" ++ docSetPlatformFamily ++ "</string>"
         , "<key>isDashDocset</key>"
         , "<true/>"
         , "<key>dashIndexFilePath</key>"
@@ -169,7 +176,7 @@ copyHtml doc dst = do
             pkg:_ -> ".." P.</> pkg P.</> srcNize file
 
     packageLike p = let t = both $ P.toText p
-                        in T.any (== '-') t && (T.all (`elem` "0123456789.") . T.takeWhile (/= '-') $ T.reverse t)
+                        in T.any (== '-') t && (T.all (`elem` ("0123456789." :: String)) . T.takeWhile (/= '-') $ T.reverse t)
 
 commonPrefix :: P.FilePath -> P.FilePath -> P.FilePath
 commonPrefix a0 b0 = P.concat $ loop id (P.splitDirectories a0) (P.splitDirectories b0) where
@@ -263,7 +270,7 @@ populateFunction conn pkg modn name =
           (moduleNmaeUrl . Ghc.moduleNameString . Ghc.moduleName) modn ++ ".html#" ++
           prefix : ':' :
           escapeSpecial (Ghc.getOccString name)
-    specialChars  = "!&|+$%(,)*<>-/=#^\\?"
+    specialChars  = "!&|+$%(,)*<>-/=#^\\?" :: String
     escapeSpecial = concatMap (\c -> if c `elem` specialChars then '-': show (fromEnum c) ++ "-" else [c])
     prefix        = case name of
         _ | Ghc.isTyConName name -> 't'
