@@ -175,8 +175,11 @@ copyHtml doc dst = do
             []    -> file
             pkg:_ -> ".." P.</> pkg P.</> srcNize file
 
-    packageLike p = let t = both $ P.toText p
-                        in T.any (== '-') t && (T.all (`elem` ("0123456789." :: String)) . T.takeWhile (/= '-') $ T.reverse t)
+    packageLike p =
+        let t' = both (P.toText p)
+            t = fromMaybe t' (T.stripSuffix "/" t')
+            (pkg, version) = T.breakOnEnd "-" t
+        in not (T.null pkg) && T.all (`elem` ("0123456789." :: String)) version
 
 commonPrefix :: P.FilePath -> P.FilePath -> P.FilePath
 commonPrefix a0 b0 = P.concat $ loop id (P.splitDirectories a0) (P.splitDirectories b0) where
