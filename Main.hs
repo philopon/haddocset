@@ -11,7 +11,7 @@ import qualified Filesystem.Path.CurrentOS as P
 
 import           System.IO.Error
 
-import qualified Database.SQLite.Simple    as Sql
+import qualified Data.Text                 as T
 
 import           Data.Maybe
 
@@ -19,21 +19,22 @@ import           Data.Maybe
 import           Options.Applicative
 
 import           Documentation.Haddocset
+import           Documentation.Haddocset.Index
+import           Documentation.Haddocset.Plist
 
 createCommand :: Options -> IO ()
 createCommand o = do
-    unless (optQuiet o) $ putStrLn "[1/5] Create Directory."
-    P.createDirectory False (optTarget o) -- for fail when directory already exists.
-    P.createTree           (optDocumentsDir o)
-    P.createDirectory True (optHaddockDir o)
+  unless (optQuiet o) $ putStrLn "[1/5] Create Directory."
+  P.createDirectory False (optTarget o) -- for fail when directory already exists.
+  P.createTree           (optDocumentsDir o)
+  P.createDirectory True (optHaddockDir o)
 
-    unless (optQuiet o) $ putStrLn "[2/5] Writing plist."
-    writeFile (P.encodeString $ optTarget o P.</> "Contents/Info.plist") $ showPlist (createPlist $ optCommand o)
+  unless (optQuiet o) $ putStrLn "[2/5] Writing plist."
+  P.writeTextFile (optTarget o P.</> "Contents/Info.plist") $
+        showPlist (createPlist $ optCommand o)
 
-    unless (optQuiet o) $ putStrLn "[3/5] Migrate Database."
-    conn <- Sql.open . P.encodeString $ optTarget o P.</> "Contents/Resources/docSet.dsidx"
-    Sql.execute_ conn "CREATE TABLE searchIndex(id INTEGER PRIMARY KEY, name TEXT, type TEXT, path TEXT, package TEXT);"
-    Sql.execute_ conn "CREATE UNIQUE INDEX anchor ON searchIndex (name, type, path, package);"
+  unless (optQuiet o) $ putStrLn "[3/5] Migrate Database."
+  withSearchIndex (optTarget o P.</> "Contents/Resources/docSet.dsidx") $ \idx -> do
 
     globalDirs <- globalPackageDirectories (optHcPkg o)
     unless (optQuiet o) $ do
@@ -48,21 +49,22 @@ createCommand o = do
     unless (optQuiet o) $ putStr "    Global package count:     " >> print (length globals)
 
     unless (optQuiet o) $ putStrLn "[4/5] Copy and populate Documents."
-    forM_ iFiles $ \iFile -> addSinglePackage (optQuiet o) False (optDocumentsDir o) (optHaddockDir o) conn iFile
+    forM_ iFiles $ \iFile ->
+        addSinglePackage (optQuiet o) False (optDocumentsDir o) (optHaddockDir o) idx iFile
 
     unless (optQuiet o) $ putStrLn "[5/5] Create index."
     haddockIndex (optHaddockDir o) (optDocumentsDir o)
 
 addCommand :: Options -> Bool -> IO ()
-addCommand o force = do
-    conn <- Sql.open . P.encodeString $ optTarget o P.</> "Contents/Resources/docSet.dsidx"
-    forM_ (toAddFiles $ optCommand o) $ \i -> go conn i
-        `catchIOError` handler
+addCommand o force =
+  withSearchIndex (optTarget o P.</> "Contents/Resources/docSet.dsidx") $ \idx -> do
+    forM_ (toAddFiles $ optCommand o) $ \i ->
+        go idx i `catchIOError` handler
     haddockIndex (optHaddockDir o) (optDocumentsDir o)
   where
-    go conn p = readDocInfoFile p >>= \mbIFile -> case mbIFile of
+    go idx p = readDocInfoFile p >>= \mbIFile -> case mbIFile of
         Nothing    -> return ()
-        Just iFile -> addSinglePackage (optQuiet o) force (optDocumentsDir o) (optHaddockDir o) conn iFile
+        Just iFile -> addSinglePackage (optQuiet o) force (optDocumentsDir o) (optHaddockDir o) idx iFile
     handler ioe
             | isDoesNotExistError ioe = print   ioe
             | otherwise               = ioError ioe
@@ -108,11 +110,13 @@ main = do
                     <> command "add"    (info addOpts $ progDesc "add package to docset."))
 
     createOpts = Create
-        <$> ( Plist <$> (strOption (long "CFBundleIdentifier")   <|> pure "haskell")
-                    <*> (strOption (long "CFBundleName")         <|> pure "Haskell")
-                    <*> (strOption (long "DocSetPlatformFamily") <|> pure "haskell"))
+        <$> ( Plist <$> (textOption (long "CFBundleIdentifier")   <|> pure "haskell")
+                    <*> (textOption (long "CFBundleName")         <|> pure "Haskell")
+                    <*> (textOption (long "DocSetPlatformFamily") <|> pure "haskell"))
         <*> many (argument (P.decodeString <$> str) (metavar "CONFS" <> help "path to installed package configuration."))
 
     addOpts = Add
         <$> some (argument (P.decodeString <$> str) (metavar "CONFS" <> help "path to installed package configuration."))
         <*> switch (long "force" <> short 'f' <> help "overwrite exist package.")
+
+    textOption = fmap T.pack . strOption

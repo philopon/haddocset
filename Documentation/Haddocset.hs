@@ -1,17 +1,16 @@
 {-# LANGUAGE NamedFieldPuns     #-}
 {-# LANGUAGE OverloadedStrings  #-}
 {-# LANGUAGE Rank2Types         #-}
-{-# LANGUAGE RecordWildCards    #-}
-{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TupleSections      #-}
 {-# LANGUAGE ViewPatterns       #-}
 {-# LANGUAGE CPP                #-}
 
 module Documentation.Haddocset where
 
-#if !MIN_VERSION_base(4,8,0)
+#if __GLASGOW_HASKELL__ < 709
 import           Control.Applicative
 #endif
+
 import           Control.Monad.Catch
 import           Control.Monad
 import           Control.Monad.Trans.Resource
@@ -23,8 +22,6 @@ import qualified Filesystem.Path.CurrentOS         as P
 import           System.IO
 import           System.IO.Error(mkIOError, alreadyExistsErrorType, isDoesNotExistError)
 import           System.Process
-
-import qualified Database.SQLite.Simple            as Sql
 
 import           Data.Maybe
 import qualified Data.Text                         as T
@@ -41,7 +38,8 @@ import qualified Name                              as Ghc
 
 import           Data.Conduit
 import qualified Data.Conduit.Filesystem           as P
-import qualified Data.Conduit.List                 as CL
+
+import Documentation.Haddocset.Index
 
 docsetDir :: P.FilePath -> P.FilePath
 docsetDir d =
@@ -81,7 +79,7 @@ readDocInfoFile pifile = P.isDirectory pifile >>= \isDir ->
         hs@(h:_) -> readInterfaceFile freshNameCache (P.encodeString h) >>= \ei -> case ei of
             Left _     -> return Nothing
             Right (InterfaceFile _ (intf:_)) -> do
-#if MIN_VERSION_ghc(7,10,0)
+#if __GLASGOW_HASKELL__ >= 710
                 let rPkg = readP_to_S parse . Ghc.packageKeyString . Ghc.modulePackageKey $ instMod intf :: [(PackageId, String)]
 #else
                 let rPkg = readP_to_S parse . Ghc.packageIdString . Ghc.modulePackageId $ instMod intf :: [(PackageId, String)]
@@ -103,32 +101,6 @@ readDocInfoFile pifile = P.isDirectory pifile >>= \isDir ->
                             (map (P.decodeString . (++"/")) $ haddockHTMLs a) (exposed a)
 
             ParseOk _  _  -> Nothing
-
-data Plist = Plist
-    { cfBundleIdentifier   :: String
-    , cfBundleName         :: String
-    , docSetPlatformFamily :: String
-    } deriving Show
-
-showPlist :: Plist -> String
-showPlist Plist{..} = unlines
-        [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
-        , "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">"
-        , "<plist version=\"1.0\">"
-        , "<dict>"
-        , "<key>CFBundleIdentifier</key>"
-        , "<string>" ++ cfBundleIdentifier ++ "</string>"
-        , "<key>CFBundleName</key>"
-        , "<string>" ++ cfBundleName ++ "</string>"
-        , "<key>DocSetPlatformFamily</key>"
-        , "<string>" ++ docSetPlatformFamily ++ "</string>"
-        , "<key>isDashDocset</key>"
-        , "<true/>"
-        , "<key>dashIndexFilePath</key>"
-        , "<string>index.html</string>"
-        , "</dict>"
-        , "</plist>"
-        ]
 
 copyHtml :: DocFile -> P.FilePath -> IO ()
 copyHtml doc dst = do
@@ -214,7 +186,11 @@ docFiles :: (MonadIO m, MonadResource m) => PackageId -> [P.FilePath] -> Produce
 docFiles sourcePackageId haddockHTMLs =
     forM_ haddockHTMLs $ \dir ->
         P.sourceDirectoryDeep False (P.encodeString dir)
-            =$= awaitForever (\f -> yield $ DocFile sourcePackageId dir $ fromMaybe (error $ "Prefix missmatch: " ++ show (dir ,f)) $ P.stripPrefix dir (P.decodeString f))
+        =$= awaitForever
+            (\f -> yield
+                $ DocFile sourcePackageId dir
+                $ fromMaybe (error $ "Prefix missmatch: " ++ show (dir, f))
+                $ P.stripPrefix dir (P.decodeString f))
 
 data Provider
     = Haddock  PackageId P.FilePath
@@ -241,44 +217,10 @@ moduleProvider iFile =
                         yield $ Module pkg modn
                         mapM_ (yield . Function pkg modn) fs
 
-populatePackage :: Sql.Connection -> PackageId -> IO ()
-populatePackage conn pkg =
-    Sql.execute conn "INSERT OR IGNORE INTO searchIndex(name, type, path,package) VALUES (?,?,?,?);"
-        (display pkg, "Package" :: String, url,display pkg)
-  where
-    url = display pkg ++ "/index.html"
-
 moduleNmaeUrl :: String -> String
 moduleNmaeUrl = map dot2Dash
   where dot2Dash '.'  = '-'
         dot2Dash c    = c
-
-populateModule :: Sql.Connection -> PackageId -> Ghc.Module -> IO ()
-populateModule conn pkg modn =
-    Sql.execute conn "INSERT OR IGNORE INTO searchIndex(name, type, path, package) VALUES (?,?,?,?);"
-        (Ghc.moduleNameString $ Ghc.moduleName modn, "Module" :: String, url,display pkg)
-  where
-    url = display pkg ++ '/':
-          (moduleNmaeUrl . Ghc.moduleNameString . Ghc.moduleName) modn ++ ".html"
-
-populateFunction :: Sql.Connection -> PackageId -> Ghc.Module -> Ghc.Name -> IO ()
-populateFunction conn pkg modn name =
-    Sql.execute conn "INSERT OR IGNORE INTO searchIndex(name, type, path, package) VALUES (?,?,?,?);"
-        (Ghc.getOccString name, dataType :: String, url, display pkg)
-  where
-    url = display pkg ++ '/':
-          (moduleNmaeUrl . Ghc.moduleNameString . Ghc.moduleName) modn ++ ".html#" ++
-          prefix : ':' :
-          escapeSpecial (Ghc.getOccString name)
-    specialChars  = "!&|+$%(,)*<>-/=#^\\?" :: String
-    escapeSpecial = concatMap (\c -> if c `elem` specialChars then '-': show (fromEnum c) ++ "-" else [c])
-    prefix        = case name of
-        _ | Ghc.isTyConName name -> 't'
-          | otherwise            -> 'v'
-    dataType      = case name of
-        _ | Ghc.isTyConName   name -> "Type"
-          | Ghc.isDataConName name -> "Constructor"
-          | otherwise              -> "Function"
 
 progress :: MonadIO m => Bool -> Int -> Char -> ConduitM o o m ()
 progress cr u c = sub 1
@@ -290,13 +232,48 @@ progress cr u c = sub 1
             yield i
             sub (succ n)
 
-dispatchProvider :: Sql.Connection -> P.FilePath -> Provider -> IO ()
-dispatchProvider _ hdir (Haddock p h) =
-    let dst = hdir  P.</> P.decodeString (display p) P.<.> "haddock"
-    in P.copyFile h dst
-dispatchProvider conn _ (Package p)      = populatePackage  conn p
-dispatchProvider conn _ (Module p m)     = populateModule   conn p m
-dispatchProvider conn _ (Function p m n) = populateFunction conn p m n
+providerToEntry :: P.FilePath -> Conduit Provider IO IndexEntry
+providerToEntry hdir = awaitForever $ \provider -> case provider of
+    Haddock p h -> liftIO $
+        P.copyFile
+            h (hdir  P.</> P.decodeString (display p) P.<.> "haddock")
+    Package pkg ->
+        yield $! IndexEntry
+            { entryName = T.pack (display pkg)
+            , entryType = PackageEntry
+            , entryPath = display pkg ++ "/index.html"
+            , entryPackage = pkg
+            }
+    Module pkg modn ->
+        yield $! IndexEntry
+            { entryName = T.pack $ Ghc.moduleNameString $ Ghc.moduleName modn
+            , entryType = ModuleEntry
+            , entryPath = display pkg ++ '/' : moduleNameURL modn ++ ".html"
+            , entryPackage = pkg
+            }
+    Function pkg modn name ->
+        let typ = case () of
+                    _ | Ghc.isTyConName   name -> TypeEntry
+                      | Ghc.isDataConName name -> ConstructorEntry
+                      | otherwise              -> FunctionEntry
+            prefix = case typ of
+                        TypeEntry -> 't'
+                        _         -> 'v'
+        in yield $! IndexEntry
+            { entryName = T.pack $ Ghc.getOccString name
+            , entryType = typ
+            , entryPath
+                = display pkg ++ '/'
+                : moduleNameURL modn ++ ".html#"
+               ++ prefix : ':' : escapeSpecial (Ghc.getOccString name)
+            , entryPackage = pkg
+            }
+
+  where
+    moduleNameURL = moduleNmaeUrl . Ghc.moduleNameString . Ghc.moduleName
+
+    specialChars  = "!&|+$%(,)*<>-/=#^\\?" :: String
+    escapeSpecial = concatMap (\c -> if c `elem` specialChars then '-': show (fromEnum c) ++ "-" else [c])
 
 
 haddockIndex :: P.FilePath -> P.FilePath -> IO ()
@@ -307,22 +284,32 @@ haddockIndex haddockdir documentdir = do
 
     haddock $ "--gen-index": "--gen-contents": ("--odir=" ++ P.encodeString documentdir): argIs
 
---        dst = docdir
---              P.</> (P.decodeString . display) (docPackage doc)
-addSinglePackage :: Bool -> Bool -> P.FilePath -> P.FilePath -> Sql.Connection -> DocInfo -> IO ()
-addSinglePackage quiet force docDir haddockDir conn iFile = go `catchIOError` handler
+
+addSinglePackage
+    :: Bool -> Bool -> P.FilePath -> P.FilePath
+    -> SearchIndex ReadOnly
+    -> DocInfo
+    -> IO ()
+addSinglePackage quiet force docDir haddockDir idx iFile = go `catchIOError` handler
   where
     go = do
-        putStr "    " >> putStr (display $ diPackageId iFile) >> putChar ' ' >> hFlush stdout
-        when force $ P.removeTree $ docDir P.</> (P.decodeString . display) (diPackageId iFile)
+        putStr "    "
+        putStr (display $ diPackageId iFile)
+        putChar ' '
+        hFlush stdout
+
+        when force $
+            P.removeTree $
+                docDir P.</> (P.decodeString . display) (diPackageId iFile)
+
         runResourceT $ docFiles (diPackageId iFile) (diHTMLs iFile)
             $$ (if quiet then id else (progress False  10 '.' =$)) (copyDocument docDir)
-        Sql.execute_ conn "BEGIN;"
-        ( moduleProvider iFile
-            $$ (if quiet then id else (progress True  100 '*' =$)) (CL.mapM_ (liftIO . dispatchProvider conn haddockDir)))
-            `onException` (Sql.execute_ conn "ROLLBACK;")
-        Sql.execute_ conn "COMMIT;"
+        withReadWrite idx $ \idx' ->
+            moduleProvider iFile
+                $= providerToEntry haddockDir
+                $$ (if quiet then id else (progress True  100 '*' =$))
+                   (sinkEntries idx')
+
     handler ioe
         | isDoesNotExistError ioe = putStr "Error: " >> print   ioe
         | otherwise               = ioError ioe
-
