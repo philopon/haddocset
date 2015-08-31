@@ -168,7 +168,7 @@ copyHtml doc dst = do
 
     rebase p =
         let file    = P.filename p
-            isSrc   = "src" `elem` P.splitDirectories (P.parent p)
+            isSrc   = (`elem` P.splitDirectories (P.parent p)) `any` ["src", "src/"]
             srcNize = if isSrc then ("src" P.</>) else id
             pkgs    = filter packageLike . reverse $ P.splitDirectories (P.parent p)
         in case pkgs of
