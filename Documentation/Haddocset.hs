@@ -4,6 +4,7 @@
 {-# LANGUAGE TupleSections      #-}
 {-# LANGUAGE ViewPatterns       #-}
 {-# LANGUAGE CPP                #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 
 module Documentation.Haddocset where
 
@@ -15,6 +16,7 @@ import           Control.Monad.Catch
 import           Control.Monad
 import           Control.Monad.Trans.Resource
 import           Control.Monad.IO.Class
+import           Data.Typeable                     (Typeable)
 
 import qualified Filesystem                        as P
 import qualified Filesystem.Path.CurrentOS         as P
@@ -284,26 +286,58 @@ haddockIndex haddockdir documentdir = do
 
     haddock $ "--gen-index": "--gen-contents": ("--odir=" ++ P.encodeString documentdir): argIs
 
+-- | What to do if documentation for a package already exists?
+data ResolutionStrategy
+    = Skip
+    | Overwrite
+    | Fail
+    deriving (Show, Ord, Eq)
 
 addSinglePackage
-    :: Bool -> Bool -> P.FilePath -> P.FilePath
+    :: Bool
+    -> ResolutionStrategy
+    -> P.FilePath
+    -> P.FilePath
     -> SearchIndex ReadOnly
     -> DocInfo
     -> IO ()
-addSinglePackage quiet force docDir haddockDir idx iFile = go `catchIOError` handler
+addSinglePackage quiet resolution docDir haddockDir idx iFile =
+    go `catchIOError` handler
   where
-    go = do
+    -- Directory to which documentation for this package will be written.
+    pkgDocDir = docDir P.</> (P.decodeString . display) (diPackageId iFile)
+
+    resolveConflict :: PackageId -> IO () -> IO ()
+    resolveConflict pkgId io = do
+        hasConflict <- P.isDirectory pkgDocDir
+        if not hasConflict
+          then io
+          else case resolution of
+                 Fail      -> throwM $ AlreadyExists pkgId
+                 Overwrite -> do
+                    unless quiet $
+                        putStrLn $ "    " ++ display pkgId ++
+                                   ": Found existing documentation. Deleting."
+                    P.removeTree pkgDocDir >> io
+                 _         ->
+                    unless quiet $
+                        putStrLn $ "    " ++ display pkgId ++
+                                   ": Found existing documentation. Skipping."
+
+    go = resolveConflict (diPackageId iFile) $ do
+        -- These operations are run only after resolving a conflict--if
+        -- one existed.
+
         putStr "    "
         putStr (display $ diPackageId iFile)
         putChar ' '
         hFlush stdout
 
-        when force $
-            P.removeTree $
-                docDir P.</> (P.decodeString . display) (diPackageId iFile)
+        runResourceT $
+          docFiles (diPackageId iFile) (diHTMLs iFile)
+            $$ (if quiet then id else (progress False  10 '.' =$))
+               (copyDocument docDir)
 
-        runResourceT $ docFiles (diPackageId iFile) (diHTMLs iFile)
-            $$ (if quiet then id else (progress False  10 '.' =$)) (copyDocument docDir)
         withReadWrite idx $ \idx' ->
             moduleProvider iFile
                 $= providerToEntry haddockDir
@@ -313,3 +347,16 @@ addSinglePackage quiet force docDir haddockDir idx iFile = go `catchIOError` han
     handler ioe
         | isDoesNotExistError ioe = putStr "Error: " >> print   ioe
         | otherwise               = ioError ioe
+
+
+data AddException
+    = AlreadyExists PackageId
+  deriving (Typeable)
+
+instance Exception AddException
+
+instance Show AddException where
+    show (AlreadyExists pkg) =
+        "Failed to write documentation for " ++ display pkg ++ ". " ++
+        "Documentation for it already exists. " ++
+        "Use -f/--force to overwrite it or -s/--skip to skip it."

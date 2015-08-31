@@ -5,6 +5,7 @@
 
 import           Control.Applicative
 import           Control.Monad
+import           Data.Foldable             (asum)
 
 import qualified Filesystem                as P
 import qualified Filesystem.Path.CurrentOS as P
@@ -50,13 +51,13 @@ createCommand o = do
 
     unless (optQuiet o) $ putStrLn "[4/5] Copy and populate Documents."
     forM_ iFiles $ \iFile ->
-        addSinglePackage (optQuiet o) False (optDocumentsDir o) (optHaddockDir o) idx iFile
+        addSinglePackage (optQuiet o) Fail (optDocumentsDir o) (optHaddockDir o) idx iFile
 
     unless (optQuiet o) $ putStrLn "[5/5] Create index."
     haddockIndex (optHaddockDir o) (optDocumentsDir o)
 
-addCommand :: Options -> Bool -> IO ()
-addCommand o force =
+addCommand :: Options -> ResolutionStrategy -> IO ()
+addCommand o resolution =
   withSearchIndex (optTarget o P.</> "Contents/Resources/docSet.dsidx") $ \idx -> do
     forM_ (toAddFiles $ optCommand o) $ \i ->
         go idx i `catchIOError` handler
@@ -64,7 +65,7 @@ addCommand o force =
   where
     go idx p = readDocInfoFile p >>= \mbIFile -> case mbIFile of
         Nothing    -> return ()
-        Just iFile -> addSinglePackage (optQuiet o) force (optDocumentsDir o) (optHaddockDir o) idx iFile
+        Just iFile -> addSinglePackage (optQuiet o) resolution (optDocumentsDir o) (optHaddockDir o) idx iFile
     handler ioe
             | isDoesNotExistError ioe = print   ioe
             | otherwise               = ioError ioe
@@ -88,16 +89,18 @@ optDocumentsDir opt = optTarget opt P.</> "Contents/Resources/Documents/"
 data Command
     = Create { createPlist :: Plist, toAddFiles :: [P.FilePath] }
     | List
-    | Add    { toAddFiles :: [P.FilePath], forceAdd :: Bool }
+    | Add    { toAddFiles :: [P.FilePath]
+             , resolution :: ResolutionStrategy
+             }
     deriving Show
 
 main :: IO ()
 main = do
     opts <- execParser optRule
     case opts of
-        Options{optCommand = Create{}}      -> createCommand opts
-        Options{optCommand = List}          -> listCommand   opts
-        Options{optCommand = Add{forceAdd}} -> addCommand    opts forceAdd
+        Options{optCommand = Create{}}        -> createCommand opts
+        Options{optCommand = List}            -> listCommand   opts
+        Options{optCommand = Add{resolution}} -> addCommand    opts resolution
   where
     optRule = info (helper <*> options) fullDesc
     options = Options
@@ -117,6 +120,10 @@ main = do
 
     addOpts = Add
         <$> some (argument (P.decodeString <$> str) (metavar "CONFS" <> help "path to installed package configuration."))
-        <*> switch (long "force" <> short 'f' <> help "overwrite exist package.")
+        <*> asum
+            [ flag' Overwrite (long "force" <> short 'f' <> help "overwrite exist package.")
+            , flag' Skip (long "skip" <> short 's' <> help "skip existing packages")
+            , pure Fail
+            ]
 
     textOption = fmap T.pack . strOption
