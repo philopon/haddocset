@@ -145,10 +145,6 @@ copyHtml doc dst = do
                     | "file:///" `T.isPrefixOf` url -> Ts.TagOpen "a" (toAttr "href" (rebase . P.fromText $ T.drop 7 url) attr)
                     | "#"        `T.isPrefixOf` url -> Ts.TagOpen "a" (toAttr "href" (rebase $ addHash url dst) attr)
                     | otherwise                     -> Ts.TagOpen "a" (toAttr "href" (rebase . absp       $          url) attr)
-        | Ts.tagOpenLit "a" (Ts.anyAttrNameLit "name") tag =
-            let Ts.TagOpen _ attr = tag
-                hash = '#' `T.cons` Ts.fromAttrib "name" tag
-            in Ts.TagOpen "a" (toAttr "href" (rebase $ addHash hash dst) attr)
         | otherwise = tag
 
     addHash h file = P.dirname file P.</> case P.toText $ P.filename file of
