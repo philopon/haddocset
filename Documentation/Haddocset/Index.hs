@@ -24,7 +24,6 @@ import qualified Data.Conduit                   as C
 import qualified Data.Conduit.List              as CL
 import qualified Database.SQLite.Simple         as Sql
 import qualified Database.SQLite.Simple.ToField as Sql
-import qualified Filesystem.Path.CurrentOS      as P
 
 data ReadWrite
 
@@ -65,9 +64,9 @@ instance Sql.ToRow IndexEntry where
 
 -- | Executes the given operation on the search index at the specified
 -- location.
-withSearchIndex :: P.FilePath -> (SearchIndex ReadOnly -> IO a) -> IO a
+withSearchIndex :: FilePath -> (SearchIndex ReadOnly -> IO a) -> IO a
 withSearchIndex path f =
-    Sql.withConnection (P.encodeString path) $ \conn -> do
+    Sql.withConnection path $ \conn -> do
         Sql.execute_ conn
             "CREATE TABLE IF NOT EXISTS searchIndex \
                 \ ( id INTEGER PRIMARY KEY \

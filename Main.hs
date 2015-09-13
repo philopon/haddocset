@@ -35,7 +35,7 @@ createCommand o = do
         showPlist (createPlist $ optCommand o)
 
   unless (optQuiet o) $ putStrLn "[3/5] Migrate Database."
-  withSearchIndex (optTarget o P.</> "Contents/Resources/docSet.dsidx") $ \idx -> do
+  withSearchIndex (P.encodeString $ optTarget o P.</> "Contents/Resources/docSet.dsidx") $ \idx -> do
 
     globalDirs <- globalPackageDirectories (optHcPkg o)
     unless (optQuiet o) $ do
@@ -58,7 +58,7 @@ createCommand o = do
 
 addCommand :: Options -> ResolutionStrategy -> IO ()
 addCommand o resolution =
-  withSearchIndex (optTarget o P.</> "Contents/Resources/docSet.dsidx") $ \idx -> do
+  withSearchIndex (P.encodeString $ optTarget o P.</> "Contents/Resources/docSet.dsidx") $ \idx -> do
     forM_ (toAddFiles $ optCommand o) $ \i ->
         go idx i `catchIOError` handler
     haddockIndex (optHaddockDir o) (optDocumentsDir o)
