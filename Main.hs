@@ -3,6 +3,8 @@
 {-# LANGUAGE Rank2Types        #-}
 {-# LANGUAGE TupleSections     #-}
 
+module Main ( main ) where
+
 import           Control.Applicative
 import           Control.Monad
 import           Data.Foldable             (asum)

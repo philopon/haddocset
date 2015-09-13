@@ -6,7 +6,19 @@
 {-# LANGUAGE CPP                #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 
-module Documentation.Haddocset where
+module Documentation.Haddocset
+  ( globalPackageDirectories
+  , packageConfs
+
+  , DocInfo(..)
+  , readDocInfoFile
+
+  , ResolutionStrategy(..)
+  , addSinglePackage
+
+  , docsetDir
+  , haddockIndex
+  ) where
 
 #if __GLASGOW_HASKELL__ < 709
 import           Control.Applicative
@@ -25,10 +37,14 @@ import           System.IO
 import           System.IO.Error(mkIOError, alreadyExistsErrorType, isDoesNotExistError)
 import           System.Process
 
+import           Network.HTTP.Types.URI (urlEncode)
+
+import           Data.Char
 import           Data.List
 import           Data.Maybe
 import qualified Data.Text                         as T
 import qualified Data.Text.IO                      as T
+import qualified Data.Text.Encoding                as T
 import           Text.HTML.TagSoup                 as Ts
 import           Text.HTML.TagSoup.Match           as Ts
 
@@ -132,9 +148,9 @@ readDocInfoFile pifile = doesDirectoryExist pifile >>= \isDir ->
 copyHtml :: DocFile -> FilePath -> IO ()
 copyHtml doc dst = do
     tags <- Ts.parseTags <$> T.readFile (docAbsolute doc)
-    T.writeFile dst . Ts.renderTags $ map mapFunc tags
+    T.writeFile dst . Ts.renderTags $ concatMap (addAnchor . modifyUrl) tags
   where
-    mapFunc tag
+    modifyUrl tag
         | Ts.tagOpenLit "a" (Ts.anyAttrNameLit "href") tag =
             let absp p = collapse $ docBaseDir doc </> p
                 attr   = filter (\(n,_) -> n /= "href") (getAttr tag)
@@ -149,6 +165,35 @@ copyHtml doc dst = do
                 hash = '#' : T.unpack (Ts.fromAttrib "name" tag)
             in Ts.TagOpen "a" $ ("href", T.pack . rebase $ dst ++ hash) : attr
         | otherwise = tag
+
+    addAnchor tag@(Ts.TagOpen "a" as)
+        | Ts.anyAttrNameLit "name" as && hasClass "def" as =
+            maybe id (\(t, n) -> (++)
+                [ Ts.TagOpen  "a"
+                    [ ("class", "dashAnchor")
+                    , ("name", T.concat ["//apple_ref/cpp/", t, "/", T.decodeUtf8 . urlEncode True $ T.encodeUtf8 n])
+                    ]
+                , Ts.TagClose "a"
+                ]) (anchorName =<< lookup "name" as) $
+            [tag]
+      | otherwise = [tag]
+    addAnchor tag = [tag]
+
+    unescape [] = Just []
+    unescape ('-':n) = case reads n of
+        [(c, '-':o)] -> (toEnum c :) <$> unescape o
+        _            -> Nothing
+    unescape (c:n) = (c:) <$> unescape n
+
+    anchorName s = fmap T.pack <$> case T.unpack s of
+      ('t':_:t)     -> ("Type",) <$> unescape t
+      ('v':_:':':c) -> ("Constructor",) <$> unescape (':':c)
+      ('v':_:a:as)
+        | isUpper a -> ("Constructor",) <$> unescape (a:as)
+        | otherwise -> ("Function",) <$> unescape (a:as)
+      _ -> Nothing
+
+    hasClass c = maybe False (any (c ==) . T.words) . lookup "class"
 
     getAttr (TagOpen _ a) = a
     getAttr _             = error "copyHtml: call attr to !TagOpen."
