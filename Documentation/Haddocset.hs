@@ -66,7 +66,7 @@ stripPrefixPath a0 b0 = joinPath <$> go (splitPath a0) (splitPath b0)
       | otherwise = Nothing
 
 docsetDir :: FilePath -> FilePath
-docsetDir = (-<.> "docset")
+docsetDir = flip replaceExtension "docset"
 
 listDirectory :: FilePath -> IO [FilePath]
 listDirectory p = map (p </>) . filter (`notElem` [".", ".."]) <$> getDirectoryContents p
