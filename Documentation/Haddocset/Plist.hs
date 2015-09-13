@@ -32,6 +32,8 @@ showPlist Plist{..} = T.unlines
     , "<true/>"
     , "<key>dashIndexFilePath</key>"
     , "<string>index.html</string>"
+    , "<key>DashDocSetFamily</key>"
+    , "<string>dashtoc</string>"
     , "</dict>"
     , "</plist>"
     ]
