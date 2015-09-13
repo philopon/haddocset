@@ -1,33 +1,34 @@
 {-# LANGUAGE NamedFieldPuns     #-}
 {-# LANGUAGE OverloadedStrings  #-}
 {-# LANGUAGE Rank2Types         #-}
-{-# LANGUAGE RecordWildCards    #-}
-{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TupleSections      #-}
 {-# LANGUAGE ViewPatterns       #-}
 {-# LANGUAGE CPP                #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 
 module Documentation.Haddocset where
 
-#if !MIN_VERSION_base(4,8,0)
+#if __GLASGOW_HASKELL__ < 709
 import           Control.Applicative
 #endif
+
 import           Control.Monad.Catch
 import           Control.Monad
 import           Control.Monad.Trans.Resource
 import           Control.Monad.IO.Class
+import           Data.Typeable                     (Typeable)
 
-import qualified Filesystem                        as P
-import qualified Filesystem.Path.CurrentOS         as P
+import           System.FilePath
+import           System.Directory
 
 import           System.IO
 import           System.IO.Error(mkIOError, alreadyExistsErrorType, isDoesNotExistError)
 import           System.Process
 
-import qualified Database.SQLite.Simple            as Sql
-
+import           Data.List
 import           Data.Maybe
 import qualified Data.Text                         as T
+import qualified Data.Text.IO                      as T
 import           Text.HTML.TagSoup                 as Ts
 import           Text.HTML.TagSoup.Match           as Ts
 
@@ -40,48 +41,69 @@ import qualified Module                            as Ghc
 import qualified Name                              as Ghc
 
 import           Data.Conduit
-import qualified Data.Conduit.Filesystem           as P
-import qualified Data.Conduit.List                 as CL
+import           Data.Conduit.Filesystem (sourceDirectoryDeep)
 
-docsetDir :: P.FilePath -> P.FilePath
-docsetDir d =
-    if P.extension d == Just "docset"
-    then d
-    else d P.<.> "docset"
+import Documentation.Haddocset.Index
 
-globalPackageDirectories :: FilePath -> IO [P.FilePath]
+collapse :: FilePath -> FilePath
+collapse = joinPath . reverse . go [] . splitDirectories
+  where
+    go cs []        = cs
+    go cs (".": ps) = go cs ps
+    go cs ("..":ps) = go (tail cs) ps
+    go cs (p:   ps) = go (p:cs) ps
+
+parent :: FilePath -> FilePath
+parent = takeDirectory . dropTrailingPathSeparator
+
+stripPrefixPath :: FilePath -> FilePath -> Maybe FilePath
+stripPrefixPath a0 b0 = joinPath <$> go (splitPath a0) (splitPath b0)
+  where
+    go _      []  = Nothing
+    go []     bs  = Just bs
+    go (a:as) (b:bs)
+      | a == b    = go as bs
+      | otherwise = Nothing
+
+docsetDir :: FilePath -> FilePath
+docsetDir = flip replaceExtension "docset"
+
+listDirectory :: FilePath -> IO [FilePath]
+listDirectory p = map (p </>) . filter (`notElem` [".", ".."]) <$> getDirectoryContents p
+
+globalPackageDirectories :: FilePath -> IO [FilePath]
 globalPackageDirectories hcPkg = do
-    ds <- map (P.decodeString . init) . filter isPkgDBLine . lines <$>
+    ds <- map init . filter isPkgDBLine . lines <$>
         readProcess hcPkg ["list", "--global"] ""
-    forM ds $ \d -> P.isDirectory d >>= \isDir ->
+    forM ds $ \d -> doesDirectoryExist d >>= \isDir -> return $
         if isDir
-        then return d
-        else return (P.directory d)
+        then d
+        else (takeDirectory d)
   where
     isPkgDBLine ""      = False
     isPkgDBLine (' ':_) = False
     isPkgDBLine _       = True
 
-packageConfs :: P.FilePath -> IO [P.FilePath]
+packageConfs :: FilePath -> IO [FilePath]
 packageConfs dir =
-    filter (("package.cache" /=) . P.filename) <$> P.listDirectory dir
+    filter (("package.cache" /=) . takeFileName) <$> listDirectory dir
 
 data DocInfo = DocInfo
     { diPackageId  :: PackageId
-    , diInterfaces :: [P.FilePath]
-    , diHTMLs      :: [P.FilePath]
+    , diInterfaces :: [FilePath]
+    , diHTMLs      :: [FilePath]
     , diExposed    :: Bool
     } deriving Show
 
-readDocInfoFile :: P.FilePath -> IO (Maybe DocInfo)
-readDocInfoFile pifile = P.isDirectory pifile >>= \isDir ->
+readDocInfoFile :: FilePath -> IO (Maybe DocInfo)
+readDocInfoFile pifile = doesDirectoryExist pifile >>= \isDir ->
     if isDir
-    then filter ((== Just "haddock") . P.extension) <$> P.listDirectory pifile >>= \hdc -> case hdc of
+    then filter ((== ".haddock") . takeExtension) <$> listDirectory pifile >>= \hdc -> case hdc of
         []       -> return Nothing
-        hs@(h:_) -> readInterfaceFile freshNameCache (P.encodeString h) >>= \ei -> case ei of
+        hs@(h:_) -> readInterfaceFile freshNameCache h >>= \ei -> case ei of
             Left _     -> return Nothing
             Right (InterfaceFile _ (intf:_)) -> do
-#if MIN_VERSION_ghc(7,10,0)
+#if __GLASGOW_HASKELL__ >= 710
                 let rPkg = readP_to_S parse . Ghc.packageKeyString . Ghc.modulePackageKey $ instMod intf :: [(PackageId, String)]
 #else
                 let rPkg = readP_to_S parse . Ghc.packageIdString . Ghc.modulePackageId $ instMod intf :: [(PackageId, String)]
@@ -89,138 +111,100 @@ readDocInfoFile pifile = P.isDirectory pifile >>= \isDir ->
                 case rPkg of
                     []  -> return Nothing
                     pkg -> do
-                        return . Just $ DocInfo (fst $ last pkg) hs [P.collapse $ pifile P.</> P.decodeString "./" ] True
+                        return . Just $ DocInfo (fst $ last pkg) hs [collapse pifile] True
             Right _ -> return Nothing
     else do
-        result <- parseInstalledPackageInfo <$> readFile (P.encodeString pifile)
+        result <- parseInstalledPackageInfo <$> readFile pifile
         return $ case result of
             ParseFailed _ -> Nothing
             ParseOk [] a
                 | null (haddockHTMLs a)      -> Nothing
                 | null (haddockInterfaces a) -> Nothing
                 | otherwise -> Just $
-                    DocInfo (sourcePackageId a) (map P.decodeString $ haddockInterfaces a)
-                            (map (P.decodeString . (++"/")) $ haddockHTMLs a) (exposed a)
+                    DocInfo
+                        (sourcePackageId a)
+                        (haddockInterfaces a)
+                        (haddockHTMLs a)
+                        (exposed a)
 
             ParseOk _  _  -> Nothing
 
-data Plist = Plist
-    { cfBundleIdentifier   :: String
-    , cfBundleName         :: String
-    , docSetPlatformFamily :: String
-    } deriving Show
-
-showPlist :: Plist -> String
-showPlist Plist{..} = unlines
-        [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
-        , "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">"
-        , "<plist version=\"1.0\">"
-        , "<dict>"
-        , "<key>CFBundleIdentifier</key>"
-        , "<string>" ++ cfBundleIdentifier ++ "</string>"
-        , "<key>CFBundleName</key>"
-        , "<string>" ++ cfBundleName ++ "</string>"
-        , "<key>DocSetPlatformFamily</key>"
-        , "<string>" ++ docSetPlatformFamily ++ "</string>"
-        , "<key>isDashDocset</key>"
-        , "<true/>"
-        , "<key>dashIndexFilePath</key>"
-        , "<string>index.html</string>"
-        , "</dict>"
-        , "</plist>"
-        ]
-
-copyHtml :: DocFile -> P.FilePath -> IO ()
+copyHtml :: DocFile -> FilePath -> IO ()
 copyHtml doc dst = do
-    tags <- Ts.parseTags <$> P.readTextFile (docAbsolute doc)
-    P.writeTextFile dst . Ts.renderTags $ map mapFunc tags
+    tags <- Ts.parseTags <$> T.readFile (docAbsolute doc)
+    T.writeFile dst . Ts.renderTags $ map mapFunc tags
   where
     mapFunc tag
         | Ts.tagOpenLit "a" (Ts.anyAttrNameLit "href") tag =
-            let absp p = P.collapse $ docBaseDir doc P.</> P.fromText p
+            let absp p = collapse $ docBaseDir doc </> p
                 attr   = filter (\(n,_) -> n /= "href") (getAttr tag)
-            in case Ts.fromAttrib "href" tag of
-                url | "http://"  `T.isPrefixOf` url -> tag
-                    | "https://" `T.isPrefixOf` url -> tag
-                    | "file:///" `T.isPrefixOf` url -> Ts.TagOpen "a" (toAttr "href" (rebase . P.fromText $ T.drop 7 url) attr)
-                    | "#"        `T.isPrefixOf` url -> Ts.TagOpen "a" (toAttr "href" (rebase $ addHash url dst) attr)
-                    | otherwise                     -> Ts.TagOpen "a" (toAttr "href" (rebase . absp       $          url) attr)
+            in case T.unpack $ Ts.fromAttrib "href" tag of
+                url | "http://"  `isPrefixOf` url -> tag
+                    | "https://" `isPrefixOf` url -> tag
+                    | "file:///" `isPrefixOf` url -> Ts.TagOpen "a" $ ("href", T.pack . rebase $ drop 7 url) : attr
+                    | "#"        `isPrefixOf` url -> Ts.TagOpen "a" $ ("href", T.pack . rebase $ dst ++ url) : attr
+                    | otherwise                   -> Ts.TagOpen "a" $ ("href", T.pack . rebase $ absp  url) : attr
         | Ts.tagOpenLit "a" (Ts.anyAttrNameLit "name") tag =
             let Ts.TagOpen _ attr = tag
-                hash = '#' `T.cons` Ts.fromAttrib "name" tag
-            in Ts.TagOpen "a" (toAttr "href" (rebase $ addHash hash dst) attr)
+                hash = '#' : T.unpack (Ts.fromAttrib "name" tag)
+            in Ts.TagOpen "a" $ ("href", T.pack . rebase $ dst ++ hash) : attr
         | otherwise = tag
-
-    addHash h file = P.dirname file P.</> case P.toText $ P.filename file of
-        Right r -> P.fromText $ r `T.append` h
-        Left  _ -> ""
 
     getAttr (TagOpen _ a) = a
     getAttr _             = error "copyHtml: call attr to !TagOpen."
 
-    toAttr attr url = case P.toText url of
-        Right r -> ((attr, r):)
-        Left  _ -> id
-
-    both a = case a of
-        Left  l -> l
-        Right r -> r
-
+    rebase :: FilePath -> FilePath
     rebase p =
-        let file    = P.filename p
-            isSrc   = (`elem` P.splitDirectories (P.parent p)) `any` ["src", "src/"]
-            srcNize = if isSrc then ("src" P.</>) else id
-            pkgs    = filter packageLike . reverse $ P.splitDirectories (P.parent p)
+        let file    = takeFileName p
+            isSrc   = "src" `elem` splitDirectories (parent p)
+            srcNize = if isSrc then ("src" </>) else id
+            pkgs    = filter packageLike . reverse $ splitDirectories (parent p)
         in case pkgs of
             []    -> file
-            pkg:_ -> ".." P.</> pkg P.</> srcNize file
+            pkg:_ -> ".." </> pkg </> srcNize file
 
+    packageLike :: FilePath -> Bool
     packageLike p =
-        let t' = both (P.toText p)
-            t = fromMaybe t' (T.stripSuffix "/" t')
+        let t = T.pack $ dropTrailingPathSeparator p
             (pkg, version) = T.breakOnEnd "-" t
         in not (T.null pkg) && T.all (`elem` ("0123456789." :: String)) version
 
-commonPrefix :: P.FilePath -> P.FilePath -> P.FilePath
-commonPrefix a0 b0 = P.concat $ loop id (P.splitDirectories a0) (P.splitDirectories b0) where
-  loop f [] _  = f []
-  loop f _  [] = f []
-  loop f (a:as) (b:bs) | a == b    = loop (f . (a:)) as bs
-                       | otherwise = f []
-
 data DocFile = DocFile
     { docPackage     :: PackageId
-    , docBaseDir     :: P.FilePath
-    , docRationalDir :: P.FilePath
+    , docBaseDir     :: FilePath
+    , docRationalDir :: FilePath
     } deriving Show
 
+docAbsolute :: DocFile -> FilePath
+docAbsolute doc = docBaseDir doc </> docRationalDir doc
 
-docAbsolute :: DocFile -> P.FilePath
-docAbsolute doc = docBaseDir doc P.</> docRationalDir doc
-
-copyDocument :: (MonadThrow m, MonadIO m) => P.FilePath
+copyDocument :: (MonadThrow m, MonadIO m) => FilePath
              -> Consumer DocFile m ()
 copyDocument docdir = awaitForever $ \doc -> do
     let full = docAbsolute doc
         dst = docdir
-              P.</> (P.decodeString . display) (docPackage doc)
-              P.</> docRationalDir doc
-    liftIO $ P.createTree (P.directory dst)
-    ex <- liftIO $ (||) <$> P.isFile dst <*> P.isDirectory dst
-    when ex $ throwM $ mkIOError alreadyExistsErrorType "copyDocument" Nothing (Just $ P.encodeString dst)
-    case P.extension $ docRationalDir doc of
-        Just "html"    -> liftIO $ copyHtml doc dst
-        Just "haddock" -> return ()
-        _              -> liftIO $ P.copyFile full dst
+              </> display (docPackage doc)
+              </> docRationalDir doc
+    liftIO $ createDirectoryIfMissing True (takeDirectory dst)
+    ex <- liftIO $ (||) <$> doesFileExist dst <*> doesDirectoryExist dst
+    when ex $ throwM $ mkIOError alreadyExistsErrorType "copyDocument" Nothing (Just dst)
+    case takeExtension $ docRationalDir doc of
+        ".html"    -> liftIO $ copyHtml doc dst
+        ".haddock" -> return ()
+        _          -> liftIO $ copyFile full dst
 
-docFiles :: (MonadIO m, MonadResource m) => PackageId -> [P.FilePath] -> Producer m DocFile
+docFiles :: (MonadIO m, MonadResource m) => PackageId -> [FilePath] -> Producer m DocFile
 docFiles sourcePackageId haddockHTMLs =
     forM_ haddockHTMLs $ \dir ->
-        P.sourceDirectoryDeep False (P.encodeString dir)
-            =$= awaitForever (\f -> yield $ DocFile sourcePackageId dir $ fromMaybe (error $ "Prefix missmatch: " ++ show (dir ,f)) $ P.stripPrefix dir (P.decodeString f))
+        sourceDirectoryDeep False dir
+        =$= awaitForever
+            (\f -> yield
+                $ DocFile sourcePackageId dir
+                $ fromMaybe (error $ "Prefix missmatch: " ++ show (dir, f))
+                $ stripPrefixPath (addTrailingPathSeparator dir) f)
 
 data Provider
-    = Haddock  PackageId P.FilePath
+    = Haddock  PackageId FilePath
     | Package  PackageId
     | Module   PackageId Ghc.Module
     | Function PackageId Ghc.Module Ghc.Name
@@ -230,7 +214,7 @@ moduleProvider iFile =
     mapM_ sub $ diInterfaces iFile
   where
     sub file = do
-        rd <- liftIO $ readInterfaceFile freshNameCache (P.encodeString file)
+        rd <- liftIO $ readInterfaceFile freshNameCache file
         case rd of
             Left _ -> return ()
             Right (ifInstalledIfaces -> iIntrf) -> do
@@ -244,44 +228,10 @@ moduleProvider iFile =
                         yield $ Module pkg modn
                         mapM_ (yield . Function pkg modn) fs
 
-populatePackage :: Sql.Connection -> PackageId -> IO ()
-populatePackage conn pkg =
-    Sql.execute conn "INSERT OR IGNORE INTO searchIndex(name, type, path,package) VALUES (?,?,?,?);"
-        (display pkg, "Package" :: String, url,display pkg)
-  where
-    url = display pkg ++ "/index.html"
-
 moduleNmaeUrl :: String -> String
 moduleNmaeUrl = map dot2Dash
   where dot2Dash '.'  = '-'
         dot2Dash c    = c
-
-populateModule :: Sql.Connection -> PackageId -> Ghc.Module -> IO ()
-populateModule conn pkg modn =
-    Sql.execute conn "INSERT OR IGNORE INTO searchIndex(name, type, path, package) VALUES (?,?,?,?);"
-        (Ghc.moduleNameString $ Ghc.moduleName modn, "Module" :: String, url,display pkg)
-  where
-    url = display pkg ++ '/':
-          (moduleNmaeUrl . Ghc.moduleNameString . Ghc.moduleName) modn ++ ".html"
-
-populateFunction :: Sql.Connection -> PackageId -> Ghc.Module -> Ghc.Name -> IO ()
-populateFunction conn pkg modn name =
-    Sql.execute conn "INSERT OR IGNORE INTO searchIndex(name, type, path, package) VALUES (?,?,?,?);"
-        (Ghc.getOccString name, dataType :: String, url, display pkg)
-  where
-    url = display pkg ++ '/':
-          (moduleNmaeUrl . Ghc.moduleNameString . Ghc.moduleName) modn ++ ".html#" ++
-          prefix : ':' :
-          escapeSpecial (Ghc.getOccString name)
-    specialChars  = "!&|+$%(,)*<>-/=#^\\?" :: String
-    escapeSpecial = concatMap (\c -> if c `elem` specialChars then '-': show (fromEnum c) ++ "-" else [c])
-    prefix        = case name of
-        _ | Ghc.isTyConName name -> 't'
-          | otherwise            -> 'v'
-    dataType      = case name of
-        _ | Ghc.isTyConName   name -> "Type"
-          | Ghc.isDataConName name -> "Constructor"
-          | otherwise              -> "Function"
 
 progress :: MonadIO m => Bool -> Int -> Char -> ConduitM o o m ()
 progress cr u c = sub 1
@@ -293,39 +243,127 @@ progress cr u c = sub 1
             yield i
             sub (succ n)
 
-dispatchProvider :: Sql.Connection -> P.FilePath -> Provider -> IO ()
-dispatchProvider _ hdir (Haddock p h) =
-    let dst = hdir  P.</> P.decodeString (display p) P.<.> "haddock"
-    in P.copyFile h dst
-dispatchProvider conn _ (Package p)      = populatePackage  conn p
-dispatchProvider conn _ (Module p m)     = populateModule   conn p m
-dispatchProvider conn _ (Function p m n) = populateFunction conn p m n
+providerToEntry :: FilePath -> Conduit Provider IO IndexEntry
+providerToEntry hdir = awaitForever $ \provider -> case provider of
+    Haddock p h -> liftIO $
+        copyFile h (hdir </> display p <.> "haddock")
+    Package pkg ->
+        yield $! IndexEntry
+            { entryName = T.pack (display pkg)
+            , entryType = PackageEntry
+            , entryPath = display pkg ++ "/index.html"
+            , entryPackage = pkg
+            }
+    Module pkg modn ->
+        yield $! IndexEntry
+            { entryName = T.pack $ Ghc.moduleNameString $ Ghc.moduleName modn
+            , entryType = ModuleEntry
+            , entryPath = display pkg ++ '/' : moduleNameURL modn ++ ".html"
+            , entryPackage = pkg
+            }
+    Function pkg modn name ->
+        let typ = case () of
+                    _ | Ghc.isTyConName   name -> TypeEntry
+                      | Ghc.isDataConName name -> ConstructorEntry
+                      | otherwise              -> FunctionEntry
+            prefix = case typ of
+                        TypeEntry -> 't'
+                        _         -> 'v'
+        in yield $! IndexEntry
+            { entryName = T.pack $ Ghc.getOccString name
+            , entryType = typ
+            , entryPath
+                = display pkg ++ '/'
+                : moduleNameURL modn ++ ".html#"
+               ++ prefix : ':' : escapeSpecial (Ghc.getOccString name)
+            , entryPackage = pkg
+            }
+
+  where
+    moduleNameURL = moduleNmaeUrl . Ghc.moduleNameString . Ghc.moduleName
+
+    specialChars  = "!&|+$%(,)*<>-/=#^\\?" :: String
+    escapeSpecial = concatMap (\c -> if c `elem` specialChars then '-': show (fromEnum c) ++ "-" else [c])
 
 
-haddockIndex :: P.FilePath -> P.FilePath -> IO ()
+haddockIndex :: FilePath -> FilePath -> IO ()
 haddockIndex haddockdir documentdir = do
     argIs <- map (\h -> "--read-interface="
-               ++   P.encodeString (P.dropExtension $ P.filename h) ++
-               ',': P.encodeString h) <$> P.listDirectory haddockdir
+               ++   (dropExtension $ takeFileName h) ++
+               ',': h) <$> listDirectory haddockdir
+    haddock $ "--gen-index": "--gen-contents": ("--odir=" ++ documentdir): argIs
 
-    haddock $ "--gen-index": "--gen-contents": ("--odir=" ++ P.encodeString documentdir): argIs
+-- | What to do if documentation for a package already exists?
+data ResolutionStrategy
+    = Skip
+    | Overwrite
+    | Fail
+    deriving (Show, Ord, Eq)
 
---        dst = docdir
---              P.</> (P.decodeString . display) (docPackage doc)
-addSinglePackage :: Bool -> Bool -> P.FilePath -> P.FilePath -> Sql.Connection -> DocInfo -> IO ()
-addSinglePackage quiet force docDir haddockDir conn iFile = go `catchIOError` handler
+addSinglePackage
+    :: Bool
+    -> ResolutionStrategy
+    -> FilePath
+    -> FilePath
+    -> SearchIndex ReadOnly
+    -> DocInfo
+    -> IO ()
+addSinglePackage quiet resolution docDir haddockDir idx iFile =
+    go `catchIOError` handler
   where
-    go = do
-        putStr "    " >> putStr (display $ diPackageId iFile) >> putChar ' ' >> hFlush stdout
-        when force $ P.removeTree $ docDir P.</> (P.decodeString . display) (diPackageId iFile)
-        runResourceT $ docFiles (diPackageId iFile) (diHTMLs iFile)
-            $$ (if quiet then id else (progress False  10 '.' =$)) (copyDocument docDir)
-        Sql.execute_ conn "BEGIN;"
-        ( moduleProvider iFile
-            $$ (if quiet then id else (progress True  100 '*' =$)) (CL.mapM_ (liftIO . dispatchProvider conn haddockDir)))
-            `onException` (Sql.execute_ conn "ROLLBACK;")
-        Sql.execute_ conn "COMMIT;"
+    -- Directory to which documentation for this package will be written.
+    pkgDocDir = docDir </> display (diPackageId iFile)
+
+    resolveConflict :: PackageId -> IO () -> IO ()
+    resolveConflict pkgId io = do
+        hasConflict <- doesDirectoryExist pkgDocDir
+        if not hasConflict
+          then io
+          else case resolution of
+                 Fail      -> throwM $ AlreadyExists pkgId
+                 Overwrite -> do
+                    unless quiet $
+                        putStrLn $ "    " ++ display pkgId ++
+                                   ": Found existing documentation. Deleting."
+                    removeDirectoryRecursive pkgDocDir >> io
+                 _         ->
+                    unless quiet $
+                        putStrLn $ "    " ++ display pkgId ++
+                                   ": Found existing documentation. Skipping."
+
+    go = resolveConflict (diPackageId iFile) $ do
+        -- These operations are run only after resolving a conflict--if
+        -- one existed.
+
+        putStr "    "
+        putStr (display $ diPackageId iFile)
+        putChar ' '
+        hFlush stdout
+
+        runResourceT $
+          docFiles (diPackageId iFile) (diHTMLs iFile)
+            $$ (if quiet then id else (progress False  10 '.' =$))
+               (copyDocument docDir)
+
+        withReadWrite idx $ \idx' ->
+            moduleProvider iFile
+                $= providerToEntry haddockDir
+                $$ (if quiet then id else (progress True  100 '*' =$))
+                   (sinkEntries idx')
+
     handler ioe
         | isDoesNotExistError ioe = putStr "Error: " >> print   ioe
         | otherwise               = ioError ioe
 
+
+data AddException
+    = AlreadyExists PackageId
+  deriving (Typeable)
+
+instance Exception AddException
+
+instance Show AddException where
+    show (AlreadyExists pkg) =
+        "Failed to write documentation for " ++ display pkg ++ ". " ++
+        "Documentation for it already exists. " ++
+        "Use -f/--force to overwrite it or -s/--skip to skip it."
