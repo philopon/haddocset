@@ -7,12 +7,13 @@ import           Control.Applicative
 import           Control.Monad
 import           Data.Foldable             (asum)
 
-import qualified Filesystem                as P
-import qualified Filesystem.Path.CurrentOS as P
+import           System.FilePath
+import           System.Directory
 
 import           System.IO.Error
 
 import qualified Data.Text                 as T
+import qualified Data.Text.IO              as T
 
 import           Data.Maybe
 
@@ -26,25 +27,25 @@ import           Documentation.Haddocset.Plist
 createCommand :: Options -> IO ()
 createCommand o = do
   unless (optQuiet o) $ putStrLn "[1/5] Create Directory."
-  P.createDirectory False (optTarget o) -- for fail when directory already exists.
-  P.createTree           (optDocumentsDir o)
-  P.createDirectory True (optHaddockDir o)
+  createDirectory (optTarget o) -- for fail when directory already exists.
+  createDirectoryIfMissing True (optDocumentsDir o)
+  createDirectoryIfMissing False (optHaddockDir o)
 
   unless (optQuiet o) $ putStrLn "[2/5] Writing plist."
-  P.writeTextFile (optTarget o P.</> "Contents/Info.plist") $
+  T.writeFile (optTarget o </> "Contents/Info.plist") $
         showPlist (createPlist $ optCommand o)
 
   unless (optQuiet o) $ putStrLn "[3/5] Migrate Database."
-  withSearchIndex (P.encodeString $ optTarget o P.</> "Contents/Resources/docSet.dsidx") $ \idx -> do
+  withSearchIndex (optTarget o </> "Contents/Resources/docSet.dsidx") $ \idx -> do
 
     globalDirs <- globalPackageDirectories (optHcPkg o)
     unless (optQuiet o) $ do
         putStr "    Global package directory: "
-        putStr (P.encodeString $ head globalDirs)
+        putStr (head globalDirs)
         if length globalDirs > 1
             then putStr " and " >> putStr (show . pred $ length globalDirs) >> putStrLn "directories."
             else putStrLn ""
-    globals <- concat <$> mapM (\d -> map (d P.</>) <$> packageConfs d) globalDirs
+    globals <- concat <$> mapM (\d -> map (d </>) <$> packageConfs d) globalDirs
     let locals = toAddFiles $ optCommand o
     iFiles <- filter diExposed . catMaybes <$> mapM readDocInfoFile (globals ++ locals)
     unless (optQuiet o) $ putStr "    Global package count:     " >> print (length globals)
@@ -58,7 +59,7 @@ createCommand o = do
 
 addCommand :: Options -> ResolutionStrategy -> IO ()
 addCommand o resolution =
-  withSearchIndex (P.encodeString $ optTarget o P.</> "Contents/Resources/docSet.dsidx") $ \idx -> do
+  withSearchIndex (optTarget o </> "Contents/Resources/docSet.dsidx") $ \idx -> do
     forM_ (toAddFiles $ optCommand o) $ \i ->
         go idx i `catchIOError` handler
     haddockIndex (optHaddockDir o) (optDocumentsDir o)
@@ -72,24 +73,24 @@ addCommand o resolution =
 
 listCommand :: Options -> IO ()
 listCommand o =
-    mapM_ (putStrLn . P.encodeString . P.dropExtension . P.filename) =<< P.listDirectory (optHaddockDir o)
+    mapM_ (putStrLn . dropExtension . takeFileName) =<< getDirectoryContents (optHaddockDir o)
 
 data Options
     = Options { optHcPkg   :: String
-              , optTarget  :: P.FilePath
+              , optTarget  :: FilePath
               , optQuiet   :: Bool
               , optCommand :: Command
               }
     deriving Show
 
-optHaddockDir, optDocumentsDir :: Options -> P.FilePath
-optHaddockDir   opt = optTarget opt P.</> "Contents/Resources/Haddock/"
-optDocumentsDir opt = optTarget opt P.</> "Contents/Resources/Documents/"
+optHaddockDir, optDocumentsDir :: Options -> FilePath
+optHaddockDir   opt = optTarget opt </> "Contents/Resources/Haddock/"
+optDocumentsDir opt = optTarget opt </> "Contents/Resources/Documents/"
 
 data Command
-    = Create { createPlist :: Plist, toAddFiles :: [P.FilePath] }
+    = Create { createPlist :: Plist, toAddFiles :: [FilePath] }
     | List
-    | Add    { toAddFiles :: [P.FilePath]
+    | Add    { toAddFiles :: [FilePath]
              , resolution :: ResolutionStrategy
              }
     deriving Show
@@ -105,7 +106,7 @@ main = do
     optRule = info (helper <*> options) fullDesc
     options = Options
         <$> (strOption (long "hc-pkg" <> metavar "CMD" <> help "hc-pkg command (default: ghc-pkg)") <|> pure "ghc-pkg")
-        <*> fmap (docsetDir . P.decodeString)
+        <*> fmap docsetDir
             (strOption (long "target" <> short 't' <> metavar "DOCSET" <> help "output directory (default: haskell.docset)") <|> pure "haskell")
         <*> switch (long "quiet" <> short 'q' <> help "suppress output.")
         <*> subparser (command "create" (info createOpts  $ progDesc "crate new docset.")
@@ -116,10 +117,10 @@ main = do
         <$> ( Plist <$> (textOption (long "CFBundleIdentifier")   <|> pure "haskell")
                     <*> (textOption (long "CFBundleName")         <|> pure "Haskell")
                     <*> (textOption (long "DocSetPlatformFamily") <|> pure "haskell"))
-        <*> many (argument (P.decodeString <$> str) (metavar "CONFS" <> help "path to installed package configuration."))
+        <*> many (argument str (metavar "CONFS" <> help "path to installed package configuration."))
 
     addOpts = Add
-        <$> some (argument (P.decodeString <$> str) (metavar "CONFS" <> help "path to installed package configuration."))
+        <$> some (argument str (metavar "CONFS" <> help "path to installed package configuration."))
         <*> asum
             [ flag' Overwrite (long "force" <> short 'f' <> help "overwrite exist package.")
             , flag' Skip (long "skip" <> short 's' <> help "skip existing packages")
