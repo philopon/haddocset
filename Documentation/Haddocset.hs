@@ -168,15 +168,18 @@ copyHtml doc dst = do
 
     rebase p =
         let file    = P.filename p
-            isSrc   = "src" `elem` P.splitDirectories (P.parent p)
+            isSrc   = (`elem` P.splitDirectories (P.parent p)) `any` ["src", "src/"]
             srcNize = if isSrc then ("src" P.</>) else id
             pkgs    = filter packageLike . reverse $ P.splitDirectories (P.parent p)
         in case pkgs of
             []    -> file
             pkg:_ -> ".." P.</> pkg P.</> srcNize file
 
-    packageLike p = let t = both $ P.toText p
-                        in T.any (== '-') t && (T.all (`elem` ("0123456789." :: String)) . T.takeWhile (/= '-') $ T.reverse t)
+    packageLike p =
+        let t' = both (P.toText p)
+            t = fromMaybe t' (T.stripSuffix "/" t')
+            (pkg, version) = T.breakOnEnd "-" t
+        in not (T.null pkg) && T.all (`elem` ("0123456789." :: String)) version
 
 commonPrefix :: P.FilePath -> P.FilePath -> P.FilePath
 commonPrefix a0 b0 = P.concat $ loop id (P.splitDirectories a0) (P.splitDirectories b0) where
