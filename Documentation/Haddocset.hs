@@ -18,15 +18,17 @@ import           Control.Monad.Trans.Resource
 import           Control.Monad.IO.Class
 import           Data.Typeable                     (Typeable)
 
-import qualified Filesystem                        as P
-import qualified Filesystem.Path.CurrentOS         as P
+import           System.FilePath
+import           System.Directory
 
 import           System.IO
 import           System.IO.Error(mkIOError, alreadyExistsErrorType, isDoesNotExistError)
 import           System.Process
 
+import           Data.List
 import           Data.Maybe
 import qualified Data.Text                         as T
+import qualified Data.Text.IO                      as T
 import           Text.HTML.TagSoup                 as Ts
 import           Text.HTML.TagSoup.Match           as Ts
 
@@ -39,46 +41,66 @@ import qualified Module                            as Ghc
 import qualified Name                              as Ghc
 
 import           Data.Conduit
-import qualified Data.Conduit.Filesystem           as P
+import           Data.Conduit.Filesystem (sourceDirectoryDeep)
 
 import Documentation.Haddocset.Index
 
-docsetDir :: P.FilePath -> P.FilePath
-docsetDir d =
-    if P.extension d == Just "docset"
-    then d
-    else d P.<.> "docset"
+collapse :: FilePath -> FilePath
+collapse = joinPath . reverse . go [] . splitDirectories
+  where
+    go cs []        = cs
+    go cs (".": ps) = go cs ps
+    go cs ("..":ps) = go (tail cs) ps
+    go cs (p:   ps) = go (p:cs) ps
 
-globalPackageDirectories :: FilePath -> IO [P.FilePath]
+parent :: FilePath -> FilePath
+parent = takeDirectory . dropTrailingPathSeparator
+
+stripPrefixPath :: FilePath -> FilePath -> Maybe FilePath
+stripPrefixPath a0 b0 = joinPath <$> go (splitPath a0) (splitPath b0)
+  where
+    go _      []  = Nothing
+    go []     bs  = Just bs
+    go (a:as) (b:bs)
+      | a == b    = go as bs
+      | otherwise = Nothing
+
+docsetDir :: FilePath -> FilePath
+docsetDir = flip replaceExtension "docset"
+
+listDirectory :: FilePath -> IO [FilePath]
+listDirectory p = map (p </>) . filter (`notElem` [".", ".."]) <$> getDirectoryContents p
+
+globalPackageDirectories :: FilePath -> IO [FilePath]
 globalPackageDirectories hcPkg = do
-    ds <- map (P.decodeString . init) . filter isPkgDBLine . lines <$>
+    ds <- map init . filter isPkgDBLine . lines <$>
         readProcess hcPkg ["list", "--global"] ""
-    forM ds $ \d -> P.isDirectory d >>= \isDir ->
+    forM ds $ \d -> doesDirectoryExist d >>= \isDir -> return $
         if isDir
-        then return d
-        else return (P.directory d)
+        then d
+        else (takeDirectory d)
   where
     isPkgDBLine ""      = False
     isPkgDBLine (' ':_) = False
     isPkgDBLine _       = True
 
-packageConfs :: P.FilePath -> IO [P.FilePath]
+packageConfs :: FilePath -> IO [FilePath]
 packageConfs dir =
-    filter (("package.cache" /=) . P.filename) <$> P.listDirectory dir
+    filter (("package.cache" /=) . takeFileName) <$> listDirectory dir
 
 data DocInfo = DocInfo
     { diPackageId  :: PackageId
-    , diInterfaces :: [P.FilePath]
-    , diHTMLs      :: [P.FilePath]
+    , diInterfaces :: [FilePath]
+    , diHTMLs      :: [FilePath]
     , diExposed    :: Bool
     } deriving Show
 
-readDocInfoFile :: P.FilePath -> IO (Maybe DocInfo)
-readDocInfoFile pifile = P.isDirectory pifile >>= \isDir ->
+readDocInfoFile :: FilePath -> IO (Maybe DocInfo)
+readDocInfoFile pifile = doesDirectoryExist pifile >>= \isDir ->
     if isDir
-    then filter ((== Just "haddock") . P.extension) <$> P.listDirectory pifile >>= \hdc -> case hdc of
+    then filter ((== ".haddock") . takeExtension) <$> listDirectory pifile >>= \hdc -> case hdc of
         []       -> return Nothing
-        hs@(h:_) -> readInterfaceFile freshNameCache (P.encodeString h) >>= \ei -> case ei of
+        hs@(h:_) -> readInterfaceFile freshNameCache h >>= \ei -> case ei of
             Left _     -> return Nothing
             Right (InterfaceFile _ (intf:_)) -> do
 #if __GLASGOW_HASKELL__ >= 710
@@ -89,116 +111,100 @@ readDocInfoFile pifile = P.isDirectory pifile >>= \isDir ->
                 case rPkg of
                     []  -> return Nothing
                     pkg -> do
-                        return . Just $ DocInfo (fst $ last pkg) hs [P.collapse $ pifile P.</> P.decodeString "./" ] True
+                        return . Just $ DocInfo (fst $ last pkg) hs [collapse pifile] True
             Right _ -> return Nothing
     else do
-        result <- parseInstalledPackageInfo <$> readFile (P.encodeString pifile)
+        result <- parseInstalledPackageInfo <$> readFile pifile
         return $ case result of
             ParseFailed _ -> Nothing
             ParseOk [] a
                 | null (haddockHTMLs a)      -> Nothing
                 | null (haddockInterfaces a) -> Nothing
                 | otherwise -> Just $
-                    DocInfo (sourcePackageId a) (map P.decodeString $ haddockInterfaces a)
-                            (map (P.decodeString . (++"/")) $ haddockHTMLs a) (exposed a)
+                    DocInfo
+                        (sourcePackageId a)
+                        (haddockInterfaces a)
+                        (haddockHTMLs a)
+                        (exposed a)
 
             ParseOk _  _  -> Nothing
 
-copyHtml :: DocFile -> P.FilePath -> IO ()
+copyHtml :: DocFile -> FilePath -> IO ()
 copyHtml doc dst = do
-    tags <- Ts.parseTags <$> P.readTextFile (docAbsolute doc)
-    P.writeTextFile dst . Ts.renderTags $ map mapFunc tags
+    tags <- Ts.parseTags <$> T.readFile (docAbsolute doc)
+    T.writeFile dst . Ts.renderTags $ map mapFunc tags
   where
     mapFunc tag
         | Ts.tagOpenLit "a" (Ts.anyAttrNameLit "href") tag =
-            let absp p = P.collapse $ docBaseDir doc P.</> P.fromText p
+            let absp p = collapse $ docBaseDir doc </> p
                 attr   = filter (\(n,_) -> n /= "href") (getAttr tag)
-            in case Ts.fromAttrib "href" tag of
-                url | "http://"  `T.isPrefixOf` url -> tag
-                    | "https://" `T.isPrefixOf` url -> tag
-                    | "file:///" `T.isPrefixOf` url -> Ts.TagOpen "a" (toAttr "href" (rebase . P.fromText $ T.drop 7 url) attr)
-                    | "#"        `T.isPrefixOf` url -> Ts.TagOpen "a" (toAttr "href" (rebase $ addHash url dst) attr)
-                    | otherwise                     -> Ts.TagOpen "a" (toAttr "href" (rebase . absp       $          url) attr)
+            in case T.unpack $ Ts.fromAttrib "href" tag of
+                url | "http://"  `isPrefixOf` url -> tag
+                    | "https://" `isPrefixOf` url -> tag
+                    | "file:///" `isPrefixOf` url -> Ts.TagOpen "a" $ ("href", T.pack . rebase $ drop 7 url) : attr
+                    | "#"        `isPrefixOf` url -> Ts.TagOpen "a" $ ("href", T.pack . rebase $ dst ++ url) : attr
+                    | otherwise                   -> Ts.TagOpen "a" $ ("href", T.pack . rebase $ absp  url) : attr
         | Ts.tagOpenLit "a" (Ts.anyAttrNameLit "name") tag =
             let Ts.TagOpen _ attr = tag
-                hash = '#' `T.cons` Ts.fromAttrib "name" tag
-            in Ts.TagOpen "a" (toAttr "href" (rebase $ addHash hash dst) attr)
+                hash = '#' : T.unpack (Ts.fromAttrib "name" tag)
+            in Ts.TagOpen "a" $ ("href", T.pack . rebase $ dst ++ hash) : attr
         | otherwise = tag
-
-    addHash h file = P.dirname file P.</> case P.toText $ P.filename file of
-        Right r -> P.fromText $ r `T.append` h
-        Left  _ -> ""
 
     getAttr (TagOpen _ a) = a
     getAttr _             = error "copyHtml: call attr to !TagOpen."
 
-    toAttr attr url = case P.toText url of
-        Right r -> ((attr, r):)
-        Left  _ -> id
-
-    both a = case a of
-        Left  l -> l
-        Right r -> r
-
+    rebase :: FilePath -> FilePath
     rebase p =
-        let file    = P.filename p
-            isSrc   = (`elem` P.splitDirectories (P.parent p)) `any` ["src", "src/"]
-            srcNize = if isSrc then ("src" P.</>) else id
-            pkgs    = filter packageLike . reverse $ P.splitDirectories (P.parent p)
+        let file    = takeFileName p
+            isSrc   = "src" `elem` splitDirectories (parent p)
+            srcNize = if isSrc then ("src" </>) else id
+            pkgs    = filter packageLike . reverse $ splitDirectories (parent p)
         in case pkgs of
             []    -> file
-            pkg:_ -> ".." P.</> pkg P.</> srcNize file
+            pkg:_ -> ".." </> pkg </> srcNize file
 
+    packageLike :: FilePath -> Bool
     packageLike p =
-        let t' = both (P.toText p)
-            t = fromMaybe t' (T.stripSuffix "/" t')
+        let t = T.pack $ dropTrailingPathSeparator p
             (pkg, version) = T.breakOnEnd "-" t
         in not (T.null pkg) && T.all (`elem` ("0123456789." :: String)) version
 
-commonPrefix :: P.FilePath -> P.FilePath -> P.FilePath
-commonPrefix a0 b0 = P.concat $ loop id (P.splitDirectories a0) (P.splitDirectories b0) where
-  loop f [] _  = f []
-  loop f _  [] = f []
-  loop f (a:as) (b:bs) | a == b    = loop (f . (a:)) as bs
-                       | otherwise = f []
-
 data DocFile = DocFile
     { docPackage     :: PackageId
-    , docBaseDir     :: P.FilePath
-    , docRationalDir :: P.FilePath
+    , docBaseDir     :: FilePath
+    , docRationalDir :: FilePath
     } deriving Show
 
+docAbsolute :: DocFile -> FilePath
+docAbsolute doc = docBaseDir doc </> docRationalDir doc
 
-docAbsolute :: DocFile -> P.FilePath
-docAbsolute doc = docBaseDir doc P.</> docRationalDir doc
-
-copyDocument :: (MonadThrow m, MonadIO m) => P.FilePath
+copyDocument :: (MonadThrow m, MonadIO m) => FilePath
              -> Consumer DocFile m ()
 copyDocument docdir = awaitForever $ \doc -> do
     let full = docAbsolute doc
         dst = docdir
-              P.</> (P.decodeString . display) (docPackage doc)
-              P.</> docRationalDir doc
-    liftIO $ P.createTree (P.directory dst)
-    ex <- liftIO $ (||) <$> P.isFile dst <*> P.isDirectory dst
-    when ex $ throwM $ mkIOError alreadyExistsErrorType "copyDocument" Nothing (Just $ P.encodeString dst)
-    case P.extension $ docRationalDir doc of
-        Just "html"    -> liftIO $ copyHtml doc dst
-        Just "haddock" -> return ()
-        _              -> liftIO $ P.copyFile full dst
+              </> display (docPackage doc)
+              </> docRationalDir doc
+    liftIO $ createDirectoryIfMissing True (takeDirectory dst)
+    ex <- liftIO $ (||) <$> doesFileExist dst <*> doesDirectoryExist dst
+    when ex $ throwM $ mkIOError alreadyExistsErrorType "copyDocument" Nothing (Just dst)
+    case takeExtension $ docRationalDir doc of
+        ".html"    -> liftIO $ copyHtml doc dst
+        ".haddock" -> return ()
+        _          -> liftIO $ copyFile full dst
 
-docFiles :: (MonadIO m, MonadResource m) => PackageId -> [P.FilePath] -> Producer m DocFile
+docFiles :: (MonadIO m, MonadResource m) => PackageId -> [FilePath] -> Producer m DocFile
 docFiles sourcePackageId haddockHTMLs =
     forM_ haddockHTMLs $ \dir ->
-        P.sourceDirectoryDeep False (P.encodeString dir)
+        sourceDirectoryDeep False dir
         =$= awaitForever
             (\f -> yield
                 $ DocFile sourcePackageId dir
                 $ fromMaybe (error $ "Prefix missmatch: " ++ show (dir, f))
-                $ P.stripPrefix dir (P.decodeString f))
+                $ stripPrefixPath (addTrailingPathSeparator dir) f)
 
 data Provider
-    = Haddock  PackageId P.FilePath
+    = Haddock  PackageId FilePath
     | Package  PackageId
     | Module   PackageId Ghc.Module
     | Function PackageId Ghc.Module Ghc.Name
@@ -208,7 +214,7 @@ moduleProvider iFile =
     mapM_ sub $ diInterfaces iFile
   where
     sub file = do
-        rd <- liftIO $ readInterfaceFile freshNameCache (P.encodeString file)
+        rd <- liftIO $ readInterfaceFile freshNameCache file
         case rd of
             Left _ -> return ()
             Right (ifInstalledIfaces -> iIntrf) -> do
@@ -237,11 +243,10 @@ progress cr u c = sub 1
             yield i
             sub (succ n)
 
-providerToEntry :: P.FilePath -> Conduit Provider IO IndexEntry
+providerToEntry :: FilePath -> Conduit Provider IO IndexEntry
 providerToEntry hdir = awaitForever $ \provider -> case provider of
     Haddock p h -> liftIO $
-        P.copyFile
-            h (hdir  P.</> P.decodeString (display p) P.<.> "haddock")
+        copyFile h (hdir </> display p <.> "haddock")
     Package pkg ->
         yield $! IndexEntry
             { entryName = T.pack (display pkg)
@@ -281,13 +286,12 @@ providerToEntry hdir = awaitForever $ \provider -> case provider of
     escapeSpecial = concatMap (\c -> if c `elem` specialChars then '-': show (fromEnum c) ++ "-" else [c])
 
 
-haddockIndex :: P.FilePath -> P.FilePath -> IO ()
+haddockIndex :: FilePath -> FilePath -> IO ()
 haddockIndex haddockdir documentdir = do
     argIs <- map (\h -> "--read-interface="
-               ++   P.encodeString (P.dropExtension $ P.filename h) ++
-               ',': P.encodeString h) <$> P.listDirectory haddockdir
-
-    haddock $ "--gen-index": "--gen-contents": ("--odir=" ++ P.encodeString documentdir): argIs
+               ++   (dropExtension $ takeFileName h) ++
+               ',': h) <$> listDirectory haddockdir
+    haddock $ "--gen-index": "--gen-contents": ("--odir=" ++ documentdir): argIs
 
 -- | What to do if documentation for a package already exists?
 data ResolutionStrategy
@@ -299,8 +303,8 @@ data ResolutionStrategy
 addSinglePackage
     :: Bool
     -> ResolutionStrategy
-    -> P.FilePath
-    -> P.FilePath
+    -> FilePath
+    -> FilePath
     -> SearchIndex ReadOnly
     -> DocInfo
     -> IO ()
@@ -308,11 +312,11 @@ addSinglePackage quiet resolution docDir haddockDir idx iFile =
     go `catchIOError` handler
   where
     -- Directory to which documentation for this package will be written.
-    pkgDocDir = docDir P.</> (P.decodeString . display) (diPackageId iFile)
+    pkgDocDir = docDir </> display (diPackageId iFile)
 
     resolveConflict :: PackageId -> IO () -> IO ()
     resolveConflict pkgId io = do
-        hasConflict <- P.isDirectory pkgDocDir
+        hasConflict <- doesDirectoryExist pkgDocDir
         if not hasConflict
           then io
           else case resolution of
@@ -321,7 +325,7 @@ addSinglePackage quiet resolution docDir haddockDir idx iFile =
                     unless quiet $
                         putStrLn $ "    " ++ display pkgId ++
                                    ": Found existing documentation. Deleting."
-                    P.removeTree pkgDocDir >> io
+                    removeDirectoryRecursive pkgDocDir >> io
                  _         ->
                     unless quiet $
                         putStrLn $ "    " ++ display pkgId ++
