@@ -245,7 +245,7 @@ docFiles sourcePackageId haddockHTMLs =
         =$= awaitForever
             (\f -> yield
                 $ DocFile sourcePackageId dir
-                $ fromMaybe (error $ "Prefix missmatch: " ++ show (dir, f))
+                $ fromMaybe (error $ "Prefix mismatch: " ++ show (dir, f))
                 $ stripPrefixPath (addTrailingPathSeparator dir) f)
 
 data Provider
