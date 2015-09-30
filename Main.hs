@@ -111,7 +111,7 @@ main = do
         <*> fmap docsetDir
             (strOption (long "target" <> short 't' <> metavar "DOCSET" <> help "output directory (default: haskell.docset)") <|> pure "haskell")
         <*> switch (long "quiet" <> short 'q' <> help "suppress output.")
-        <*> subparser (command "create" (info createOpts  $ progDesc "crate new docset.")
+        <*> subparser (command "create" (info createOpts  $ progDesc "create new docset.")
                     <> command "list"   (info (pure List) $ progDesc "list package of docset.")
                     <> command "add"    (info addOpts $ progDesc "add package to docset."))
 
