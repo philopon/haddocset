@@ -139,11 +139,17 @@ readDocInfoFile pifile = doesDirectoryExist pifile >>= \isDir ->
                 | otherwise -> Just $
                     DocInfo
                         (sourcePackageId a)
-                        (haddockInterfaces a)
-                        (haddockHTMLs a)
+                        (map expandPkgRoot (haddockInterfaces a))
+                        (map expandPkgRoot (haddockHTMLs a))
                         (exposed a)
 
             ParseOk _  _  -> Nothing
+  where
+    -- drop the package.conf directory: pkgroot/package.conf.d/foo.conf -> pkgroot
+    pkgroot = takeDirectory . takeDirectory $ pifile
+    expandPkgRoot path = case splitPath path of
+        "${pkgroot}/":rest -> joinPath (pkgroot : rest)
+        _ -> path
 
 copyHtml :: DocFile -> FilePath -> IO ()
 copyHtml doc dst = do
