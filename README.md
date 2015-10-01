@@ -20,7 +20,7 @@ Available options:
   -q,--quiet               suppress output.
 
 Available commands:
-  create                   crate new docset.
+  create                   create new docset.
   list                     list package of docset.
   add                      add package to docset.
 
