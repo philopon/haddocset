@@ -41,7 +41,7 @@ createCommand o = do
   withSearchIndex (optTarget o </> "Contents/Resources/docSet.dsidx") $ \idx -> do
 
     globalDirs <- globalPackageDirectories (optHcPkg o)
-    unless (optQuiet o) $ do
+    unless ((null globalDirs) || optQuiet o) $ do
         putStr "    Global package directory: "
         putStr (head globalDirs)
         if length globalDirs > 1
