@@ -88,6 +88,7 @@ listDirectory :: FilePath -> IO [FilePath]
 listDirectory p = map (p </>) . filter (`notElem` [".", ".."]) <$> getDirectoryContents p
 
 globalPackageDirectories :: FilePath -> IO [FilePath]
+globalPackageDirectories ""    = return []
 globalPackageDirectories hcPkg = do
     ds <- map init . filter isPkgDBLine . lines <$>
         readProcess hcPkg ["list", "--global"] ""
