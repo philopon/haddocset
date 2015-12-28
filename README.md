@@ -100,7 +100,7 @@ Use with stack
 ---
 
 ```
-$ stack exec -- haddocset create target.docset
+$ stack exec -- haddocset -t target.docset create
 $ stack build --haddock
 $ stack exec -- haddocset -t target.docset add $(stack path --local-pkg-db)/*.conf 
 ```
