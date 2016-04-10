@@ -102,6 +102,7 @@ Use with stack
 ```
 $ stack exec -- haddocset -t target.docset create
 $ stack build --haddock
+$ stack exec -- haddocset -t target.docset add $(stack path --snapshot-pkg-db)/*.conf
 $ stack exec -- haddocset -t target.docset add $(stack path --local-pkg-db)/*.conf 
 ```
 Thanks: [@mohanzhang - jfeltz/dash-haskell#14](../../../../jfeltz/dash-haskell/issues/14#issuecomment-139656811) and [@nrolland - #30](../../pull/30)
