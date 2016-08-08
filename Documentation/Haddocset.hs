@@ -31,7 +31,7 @@ import           Control.Monad.IO.Class
 import           Data.Typeable                     (Typeable)
 
 import           System.FilePath
-import           System.Directory
+import           System.Directory                  hiding (listDirectory)
 
 import           System.IO
 import           System.IO.Error(mkIOError, alreadyExistsErrorType, isDoesNotExistError)
@@ -119,7 +119,9 @@ readDocInfoFile pifile = doesDirectoryExist pifile >>= \isDir ->
         hs@(h:_) -> readInterfaceFile freshNameCache h >>= \ei -> case ei of
             Left _     -> return Nothing
             Right (InterfaceFile _ (intf:_)) -> do
-#if __GLASGOW_HASKELL__ >= 710
+#if __GLASGOW_HASKELL__ >= 800
+                let rPkg = readP_to_S parse . Ghc.unitIdString . Ghc.moduleUnitId $ instMod intf :: [(PackageId, String)]
+#elif __GLASGOW_HASKELL__ >= 710
                 let rPkg = readP_to_S parse . Ghc.packageKeyString . Ghc.modulePackageKey $ instMod intf :: [(PackageId, String)]
 #else
                 let rPkg = readP_to_S parse . Ghc.packageIdString . Ghc.modulePackageId $ instMod intf :: [(PackageId, String)]
