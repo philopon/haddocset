@@ -1,5 +1,5 @@
 name:                haddocset
-version:             0.4.1
+version:             0.4.2
 synopsis:            Generate docset of Dash by Haddock haskell documentation tool
 description:         please read README.md <https://github.com/philopon/haddocset/blob/master/README.md>
 license:             BSD3
@@ -8,7 +8,7 @@ author:              HirotomoMoriwaki<philopon.dependence@gmail.com>
 maintainer:          HirotomoMoriwaki<philopon.dependence@gmail.com>
 Homepage:            https://github.com/philopon/haddocset
 Bug-reports:         https://github.com/philopon/haddocset/issues
-copyright:           (c) 2014-2015 Hirotomo Moriwaki
+copyright:           (c) 2014-2016 Hirotomo Moriwaki
 category:            Distribution
 build-type:          Simple
 cabal-version:       >=1.10
