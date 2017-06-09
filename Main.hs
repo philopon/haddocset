@@ -7,15 +7,16 @@ module Main ( main ) where
 
 import           Control.Applicative
 import           Control.Monad
-import           Data.Foldable             (asum)
+import           Data.Foldable                 (asum)
+import           Data.Semigroup
 
-import           System.FilePath
 import           System.Directory
+import           System.FilePath
 
 import           System.IO.Error
 
-import qualified Data.Text                 as T
-import qualified Data.Text.IO              as T
+import qualified Data.Text                     as T
+import qualified Data.Text.IO                  as T
 
 import           Data.Maybe
 
