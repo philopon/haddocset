@@ -42,8 +42,8 @@ createCommand o = do
   T.writeFile (optTarget o </> "Contents/Info.plist") $
         showPlist (createPlist $ optCommand o)
 
-  unless (optQuiet o) $ putStrLn "[3/5] Migrate Database."
-  withSearchIndex (optTarget o </> "Contents/Resources/docSet.dsidx") $ \idx -> do
+  unless (optQuiet o || optNoGlobalPackages o) $ putStrLn "[3/5] Migrate Database."
+  unless (optNoGlobalPackages o) $ withSearchIndex (optTarget o </> "Contents/Resources/docSet.dsidx") $ \idx -> do
 
     globalDirs <- globalPackageDirectories (optHcPkg o)
     unless (optQuiet o) $ do
@@ -83,10 +83,11 @@ listCommand o =
     mapM_ (putStrLn . dropExtension . takeFileName) =<< getDirectoryContents (optHaddockDir o)
 
 data Options
-    = Options { optHcPkg   :: String
-              , optTarget  :: FilePath
-              , optQuiet   :: Bool
-              , optCommand :: Command
+    = Options { optHcPkg            :: String
+              , optTarget           :: FilePath
+              , optQuiet            :: Bool
+              , optNoGlobalPackages :: Bool
+              , optCommand          :: Command
               }
     deriving Show
 
@@ -112,10 +113,15 @@ main = do
   where
     optRule = info (helper <*> options) fullDesc
     options = Options
-        <$> (strOption (long "hc-pkg" <> metavar "CMD" <> help "hc-pkg command (default: ghc-pkg)") <|> pure "ghc-pkg")
+        <$> (strOption (long "hc-pkg" <> metavar "CMD"
+                        <> help "hc-pkg command (default: ghc-pkg)")
+             <|> pure "ghc-pkg")
         <*> fmap docsetDir
-            (strOption (long "target" <> short 't' <> metavar "DOCSET" <> help "output directory (default: haskell.docset)") <|> pure "haskell")
+            (strOption (long "target" <> short 't' <> metavar "DOCSET"
+                        <> help "output directory (default: haskell.docset)")
+             <|> pure "haskell")
         <*> switch (long "quiet" <> short 'q' <> help "suppress output.")
+        <*> switch (long "no-global-packages" <> short 'n' <> help "do not include global packages")
         <*> subparser (command "create" (info createOpts  $ progDesc "create new docset.")
                     <> command "list"   (info (pure List) $ progDesc "list package of docset.")
                     <> command "add"    (info addOpts $ progDesc "add package to docset."))
