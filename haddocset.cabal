@@ -21,7 +21,7 @@ executable haddocset
       Documentation.Haddocset.Plist
   ghc-options:         -Wall -O2
   build-depends:       base                 >=4.6   && <4.10
-                     , ghc                  >=7.4   && <8.1
+                     , ghc                  >=7.8   && <8.1
                      , optparse-applicative >=0.11  && <0.15
                      , conduit              >=1.0   && <1.3
                      , conduit-extra        >=1.1   && <1.2
