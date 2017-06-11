@@ -2,6 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE Rank2Types        #-}
 {-# LANGUAGE TupleSections     #-}
+{-# LANGUAGE CPP               #-}
 
 module Main ( main ) where
 
@@ -25,6 +26,10 @@ import           Options.Applicative
 import           Documentation.Haddocset
 import           Documentation.Haddocset.Index
 import           Documentation.Haddocset.Plist
+
+#if MIN_VERSION_optparse_applicative(0,13,0)
+import Data.Semigroup ((<>))
+#endif
 
 createCommand :: Options -> IO ()
 createCommand o = do
