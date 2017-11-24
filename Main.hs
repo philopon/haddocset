@@ -42,6 +42,20 @@ createCommand o = do
   T.writeFile (optTarget o </> "Contents/Info.plist") $
         showPlist (createPlist $ optCommand o)
 
+  -- copy icon file
+  _ <- case createIcon (optCommand o) of
+    Nothing -> pure ()
+    Just iconPath -> do
+      unless (optQuiet o) $ putStrLn "    Writing icon."
+      hPath <- if("~/" `T.isPrefixOf` T.pack iconPath) then
+                 getHomeDirectory >>= \hDir -> pure (hDir </> drop 2 iconPath)
+               else
+                 pure iconPath
+      cPath <- canonicalizePath hPath
+      when (takeExtension cPath /= ".png") $
+        ioError (mkIOError userErrorType "icon extension should be .png" Nothing (Just cPath))
+      copyFile cPath (optTarget o </> "icon.png")
+
   unless (optQuiet o) $ putStrLn "[3/5] Migrate Database."
   withSearchIndex (optTarget o </> "Contents/Resources/docSet.dsidx") $ \idx -> do
 
@@ -95,7 +109,7 @@ optHaddockDir   opt = optTarget opt </> "Contents/Resources/Haddock/"
 optDocumentsDir opt = optTarget opt </> "Contents/Resources/Documents/"
 
 data Command
-    = Create { createPlist :: Plist, toAddFiles :: [FilePath] }
+    = Create { createPlist :: Plist, toAddFiles :: [FilePath], createIcon :: Maybe FilePath }
     | List
     | Add    { toAddFiles :: [FilePath]
              , resolution :: ResolutionStrategy
@@ -125,6 +139,7 @@ main = do
                     <*> (textOption (long "CFBundleName")         <|> pure "Haskell")
                     <*> (textOption (long "DocSetPlatformFamily") <|> pure "haskell"))
         <*> many (argument str (metavar "CONFS" <> help "path to installed package configuration."))
+        <*> (fmap Just (strOption (long "Icon")) <|> pure Nothing)
 
     addOpts = Add
         <$> some (argument str (metavar "CONFS" <> help "path to installed package configuration."))
