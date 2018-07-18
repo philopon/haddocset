@@ -50,7 +50,7 @@ import           Text.HTML.TagSoup.Match           as Ts
 
 import           Distribution.Compat.ReadP
 import           Distribution.InstalledPackageInfo
-import           Distribution.Package
+import           Distribution.Package  hiding (Module)
 import           Distribution.Text                 (display, parse)
 import           Documentation.Haddock
 import qualified Module                            as Ghc
