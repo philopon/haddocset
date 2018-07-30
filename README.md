@@ -100,8 +100,8 @@ Use with stack
 ---
 
 ```
-$ stack exec -- haddocset -t target.docset create
-$ stack build --haddock
+$ stack exec -- haddocset -t target.docset create --CFBundleName Haskell11
+$ stack build -- haddock
 $ stack exec -- haddocset -t target.docset add $(stack path --snapshot-pkg-db)/*.conf
 $ stack exec -- haddocset -t target.docset add $(stack path --local-pkg-db)/*.conf 
 ```
