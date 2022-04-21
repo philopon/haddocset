@@ -1,2 +1,4 @@
 .stack-work/
 *.docset/
+.DS_Store
+stack.yaml.lock
