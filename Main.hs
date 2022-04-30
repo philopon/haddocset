@@ -123,7 +123,9 @@ main = do
     createOpts = Create
         <$> ( Plist <$> (textOption (long "CFBundleIdentifier")   <|> pure "haskell")
                     <*> (textOption (long "CFBundleName")         <|> pure "Haskell")
-                    <*> (textOption (long "DocSetPlatformFamily") <|> pure "haskell"))
+                    -- Important not to chose haskell for the family for "open online documentation" to work properly
+                    -- Otherwise, Dash tries to own the redirect and it fails
+                    <*> (textOption (long "DocSetPlatformFamily") <|> pure "hackage"))
         <*> many (argument str (metavar "CONFS" <> help "path to installed package configuration."))
 
     addOpts = Add

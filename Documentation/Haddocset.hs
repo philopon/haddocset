@@ -39,6 +39,7 @@ import           System.Process
 
 import           Network.HTTP.Types.URI (urlEncode)
 
+import qualified Data.ByteString                  as BS
 import           Data.Char
 import           Data.List
 import           Data.Maybe
@@ -48,10 +49,18 @@ import qualified Data.Text.Encoding                as T
 import           Text.HTML.TagSoup                 as Ts
 import           Text.HTML.TagSoup.Match           as Ts
 
+#if __GLASGOW_HASKELL__ <= 800
 import           Distribution.Compat.ReadP
+#endif
 import           Distribution.InstalledPackageInfo
 import           Distribution.Package  hiding (Module)
+import           Distribution.Pretty (prettyShow)
+
+#if __GLASGOW_HASKELL__ <= 800
 import           Distribution.Text                 (display, parse)
+#elif __GLASGOW_HASKELL__ >= 800
+import           Distribution.Text                 (display, simpleParse)
+#endif
 import           Documentation.Haddock
 import qualified Module                            as Ghc
 import qualified Name                              as Ghc
@@ -116,10 +125,16 @@ readDocInfoFile pifile = doesDirectoryExist pifile >>= \isDir ->
     if isDir
     then filter ((== ".haddock") . takeExtension) <$> listDirectory pifile >>= \hdc -> case hdc of
         []       -> return Nothing
+#if __GLASGOW_HASKELL__ >= 810
+        hs@(h:_) -> readInterfaceFile freshNameCache h False >>= \ei -> case ei of
+#else
         hs@(h:_) -> readInterfaceFile freshNameCache h >>= \ei -> case ei of
+#endif
             Left _     -> return Nothing
             Right (InterfaceFile _ (intf:_)) -> do
-#if __GLASGOW_HASKELL__ >= 800
+#if __GLASGOW_HASKELL__ >= 810
+                let rPkg = simpleParse . Ghc.unitIdString . Ghc.moduleUnitId $ instMod intf :: Maybe PackageId
+#elif __GLASGOW_HASKELL__ >= 800
                 let rPkg = readP_to_S parse . Ghc.unitIdString . Ghc.moduleUnitId $ instMod intf :: [(PackageId, String)]
 #elif __GLASGOW_HASKELL__ >= 710
                 let rPkg = readP_to_S parse . Ghc.packageKeyString . Ghc.modulePackageKey $ instMod intf :: [(PackageId, String)]
@@ -127,13 +142,35 @@ readDocInfoFile pifile = doesDirectoryExist pifile >>= \isDir ->
                 let rPkg = readP_to_S parse . Ghc.packageIdString . Ghc.modulePackageId $ instMod intf :: [(PackageId, String)]
 #endif
                 case rPkg of
+#if __GLASGOW_HASKELL__ >= 810
+                    Nothing -> return Nothing
+                    Just pkg -> 
+                        return . Just $ DocInfo pkg hs [collapse pifile] True
+#else
                     []  -> return Nothing
                     pkg -> do
                         return . Just $ DocInfo (fst $ last pkg) hs [collapse pifile] True
             Right _ -> return Nothing
+#endif
     else do
+#if __GLASGOW_HASKELL__ >= 810
+        result <- parseInstalledPackageInfo <$> BS.readFile pifile
+#elif __GLASGOW_HASKELL__ <= 800
         result <- parseInstalledPackageInfo <$> readFile pifile
+#endif
         return $ case result of
+#if __GLASGOW_HASKELL__ >= 810
+            Left _ -> Nothing
+            Right (_, a)
+                | null (haddockHTMLs a)      -> Nothing
+                | null (haddockInterfaces a) -> Nothing
+                | otherwise -> Just $
+                    DocInfo
+                        (sourcePackageId a)
+                        (map expandPkgRoot (haddockInterfaces a))
+                        (map expandPkgRoot (haddockHTMLs a))
+                        (exposed a)
+#elif __GLASGOW_HASKELL__ <= 800
             ParseFailed _ -> Nothing
             ParseOk [] a
                 | null (haddockHTMLs a)      -> Nothing
@@ -146,6 +183,8 @@ readDocInfoFile pifile = doesDirectoryExist pifile >>= \isDir ->
                         (exposed a)
 
             ParseOk _  _  -> Nothing
+
+#endif
   where
     -- drop the package.conf directory: pkgroot/package.conf.d/foo.conf -> pkgroot
     pkgroot = takeDirectory . takeDirectory $ pifile
@@ -185,7 +224,13 @@ copyHtml doc dst = do
                 ]) (anchorName =<< lookup "name" as) $
             [tag]
       | otherwise = [tag]
+    addAnchor tag@(Ts.TagOpen "html" _) =
+        [tag, Ts.TagComment (" Online page at " <>  (packageIdToUrl . docPackage $ doc) <> " ")]
     addAnchor tag = [tag]
+
+    packageIdToUrl :: PackageId -> T.Text
+    packageIdToUrl (PackageIdentifier n v) = T.pack $ 
+      "https://hackage.haskell.org/package/" ++ unPackageName n ++ "-" ++ prettyShow v ++ "/docs/"
 
     unescape [] = Just []
     unescape ('-':n) = case reads n of
@@ -267,7 +312,11 @@ moduleProvider iFile =
     mapM_ sub $ diInterfaces iFile
   where
     sub file = do
+#if __GLASGOW_HASKELL__ >= 810
+        rd <- liftIO $ readInterfaceFile freshNameCache file False
+#else
         rd <- liftIO $ readInterfaceFile freshNameCache file
+#endif
         case rd of
             Left _ -> return ()
             Right (ifInstalledIfaces -> iIntrf) -> do
